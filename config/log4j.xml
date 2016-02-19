@@ -16,11 +16,11 @@
     </appender>
 
     <appender name="log" class="org.apache.log4j.RollingFileAppender">
-        <param name="File" value="&logDir;/visallo${logFileSuffix}.log" />
+        <param name="File" value="/opt/visallo/logs/visallo.log" />
         <param name="MaxFileSize" value="32MB" />
         <param name="MaxBackupIndex" value="2" />
         <layout class="org.apache.log4j.PatternLayout">
-            <param name="ConversionPattern" value="&pattern;" />
+            <param name="ConversionPattern" value="%-5p [%t]: %m%n" />
         </layout>
     </appender>
 
@@ -38,7 +38,7 @@
     </logger>
 
     <root>
-        <level value="WARN" />
+        <level value="INFO" />
         <appender-ref ref="console" />
         <appender-ref ref="log" />
     </root>
