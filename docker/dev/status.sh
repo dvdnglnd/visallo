@@ -41,7 +41,7 @@ function status_accumulo {
 
 function status_elasticsearch {
     _status_begin "Elasticsearch"
-    if [[ $(curl -XGET 'http://localhost:9200/_status' 2>&1) =~ "\"successful\":1" ]]; then
+    if [[ $(curl -XGET 'http://localhost:9200/_cluster/health?' 2>&1) =~ "\"green\"" ]]; then
         _status_good "Elasticsearch"
     else
         _status_fail "Elasticsearch"
