@@ -87,9 +87,6 @@ else
   LOCAL_PERSISTENT_DIR=${DIR}/visallo-dev-persistent
 fi
 
-${SUDO} cp \
-  ${DIR}/../docker/dev/config/visallo-ontology-minimal.properties \
-  ${LOCAL_PERSISTENT_DIR}/opt/visallo/config/
 
 ${SUDO} cp \
   ${DIR}/../config/log4j.xml \
