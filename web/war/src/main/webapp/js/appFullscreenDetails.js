@@ -4,7 +4,7 @@ define([
     'flight/lib/registry',
     'tpl!./appFullscreenDetails',
     'tpl!./appFullscreenDetailsError',
-    'detail/detail',
+    'detail/item/item',
     'util/vertex/formatters',
     'util/withDataRequest',
     'util/jquery.removePrefixedClasses'
@@ -39,13 +39,15 @@ define([
                 e.stopPropagation();
                 e.preventDefault();
 
-                var vertexIds = d.vertexIds || (d.vertices ? _.pluck(d.vertices, 'id') : null);
-                if (vertexIds) {
-                    vertexIds = _.isArray(vertexIds) ? vertexIds : [vertexIds];
-                    self.updateVertices({
-                        add: vertexIds
-                    })
-                }
+                var vertexIds = _.compact(_.isArray(d.vertexIds) ? d.vertexIds : [d.vertexIds]);
+                var edgeIds = _.compact(_.isArray(d.edgeIds) ? d.edgeIds : [d.edgeIds]);
+
+                self.updateItems({
+                    add: {
+                        vertexIds: vertexIds,
+                        edgeIds: edgeIds
+                    }
+                });
             });
             this._windowIsHidden = false;
             this.on(document, 'window-visibility-change', this.onVisibilityChange);
@@ -56,7 +58,10 @@ define([
             this.on('click', this.clearFlashing.bind(this));
             $(window).focus(this.clearFlashing.bind(this));
 
-            this.vertices = [];
+            this.on(document, 'verticesDeleted', this.onVerticesDeleted);
+            this.on(document, 'edgesDeleted', this.onEdgesDeleted);
+
+            this.objects = [];
             this.fullscreenIdentifier = Math.floor((1 + Math.random()) * 0xFFFFFF).toString(16).substring(1);
             this.$node.addClass('fullscreen-details');
 
@@ -68,13 +73,74 @@ define([
             this._windowIsHidden = false;
         };
 
+        this.onVerticesDeleted = function(event, data) {
+            var self = this;
+
+            if (this.attr.edgeIds.length) {
+                removeRelatedEdges(data.vertexIds);
+            }
+
+            this.attr.vertexIds = _.difference(this.attr.vertexIds, data.vertexIds);
+            if (this.attr.previousVertexIds && !_.difference(this.attr.previousVertexIds, this.attr.vertexIds).length) return;
+            this.attr.previousVertexIds = this.attr.vertexIds;
+
+            this.onItemsDeleted();
+
+            function removeRelatedEdges(vertexIds) {
+                var edgesToRemove = _.filter(self.objects, function(object) {
+                    if (object.type !== 'edge') return false;
+
+                    var hasDeletedVertex = _.some(vertexIds, function(vId) {
+                        return vId === object.inVertexId || vId === object.outVertexId;
+                    })
+
+                    return hasDeletedVertex;
+                });
+
+                self.attr.edgeIds = _.difference(self.attr.edgeIds, _.pluck(edgesToRemove, 'id'));
+            }
+        };
+
+        this.onEdgesDeleted = function(event, data) {
+            this.attr.edgeIds = _.without(this.attr.edgeIds, data.edgeId);
+            if (this.attr.previousEdgeIds && !_.difference(this.attr.previousEdgeIds, this.attr.edgeIds).length) return;
+            this.attr.previousEdgeIds = this.attr.edgeIds;
+
+            this.onItemsDeleted();
+        };
+
+        this.onItemsDeleted = function() {
+            var self = this;
+
+            Promise.all([
+                self.attr.vertexIds.length ?
+                    self.dataRequest('vertex', 'multiple', {
+                        vertexIds: self.attr.vertexIds
+                    }) : Promise.resolve([]),
+                self.attr.edgeIds.length ?
+                    self.dataRequest('edge', 'multiple', {
+                        edgeIds: self.attr.edgeIds
+                    }) : Promise.resolve([])
+            ])
+            .then(function(results) {
+                var vertices = results.shift().vertices || [],
+                    edges = results.shift().edges || [];
+
+                self.objects = vertices.concat(edges);
+
+                self.updateLocationHash();
+                self.handleObjectsLoaded(self.objects);
+            })
+            .catch(self.handleVerticesFailed.bind(self));
+        };
+
         this.updateLocationHash = function() {
-            location.hash = F.vertexUrl.fragmentUrl(this.vertices, this.attr.workspaceId);
+            location.hash = F.vertexUrl.fragmentUrl(this.objects, this.attr.workspaceId);
         };
 
         this.updateLayout = function() {
-            var entities = _.filter(this.vertices, filterEntity).length,
-                artifacts = _.filter(this.vertices, filterArtifacts).length,
+            var entities = _.filter(this.objects, filterEntity).length,
+                artifacts = _.filter(this.objects, filterArtifacts).length,
                 verts = entities + artifacts;
 
             this.$node
@@ -96,7 +162,7 @@ define([
             document.title = this.titleForVertices();
         };
 
-        this.handleNoVertices = function() {
+        this.handleNoObjects = function() {
             var requiredFallback = this.attr.workspaceId !== visalloData.currentWorkspaceId;
 
             document.title = requiredFallback ?
@@ -105,7 +171,7 @@ define([
 
             this.select('noResultsSelector')
                 .html(errorTemplate({
-                    vertices: this.attr.graphVertexIds,
+                    objects: this.attr.vertexIds.concat(this.attr.edgeIds),
                     somePublished: false,
                     requiredFallback: requiredFallback,
                     noWorkspaceGiven: !this.attr.workspaceId
@@ -114,35 +180,42 @@ define([
         };
 
         this.handleVerticesFailed = function() {
-            this.handleNoVertices();
+            this.handleNoObjects();
         };
 
-        this.handleVerticesLoaded = function(vertices, data) {
-            var fallbackToPublic = this.attr.workspaceId !== visalloData.currentWorkspaceId;
+        this.handleObjectsLoaded = function(objects, data) {
+            var self = this,
+                fallbackToPublic = this.attr.workspaceId !== visalloData.currentWorkspaceId;
 
             Detail.teardownAll();
             this.$node.find('.detail-pane').remove();
 
-            if (vertices.length === 0) {
-                return this.handleNoVertices();
+            if (objects.length === 0) {
+                return this.handleNoObjects();
             }
 
-            this.vertices = _.sortBy(vertices, function(v) {
-                var descriptors = [],
-                    concept = F.vertex.concept(v);
+            this.objects = _.chain(objects)
+                .sortBy(function(v) {
+                    var descriptors = [],
+                        concept = F.vertex.concept(v);
 
-                // Image/Video/Audio before documents
-                descriptors.push(
-                    F.vertex.displayType(v) === 'document' ? '1' : '0'
-                );
+                    // Image/Video/Audio before documents
+                    descriptors.push(
+                        F.vertex.displayType(v) === 'document' ? '1' : '0'
+                    );
 
-                // Sort by title
-                descriptors.push(F.vertex.title(v).toLowerCase());
-                return descriptors.join('');
-            });
+                    // Sort by title
+                    descriptors.push(F.vertex.title(v).toLowerCase());
+                    return descriptors.join('');
+                })
+                .sortBy(function(v) {
+                    return v.type === 'vertex' ? 0 : 1;
+                })
+                .value();
 
             // Find vertices not found and insert at beginning
-            var notFoundIds = _.difference(this.attr.graphVertexIds, _.pluck(this.vertices, 'id')),
+            var objectIds = this.attr.vertexIds.concat(this.attr.edgeIds),
+                notFoundIds = _.difference(objectIds, _.pluck(this.objects, 'id')),
                 notFound = _.map(notFoundIds, function(nId) {
                     return {
                         id: nId,
@@ -153,11 +226,11 @@ define([
                     };
                 });
 
-            this.vertices.splice.apply(this.vertices, [0, 0].concat(notFound));
+            this.objects.splice.apply(this.objects, [0, 0].concat(notFound));
             if (notFound.length || fallbackToPublic) {
                 this.select('noResultsSelector')
                     .html(errorTemplate({
-                        vertices: notFoundIds,
+                        objects: notFoundIds,
                         requiredFallback: fallbackToPublic,
                         somePublished: true,
                         workspaceTitle: this.workspaceTitle,
@@ -167,25 +240,32 @@ define([
                 this.loadWorkspaces();
             }
 
-            this.vertices.forEach(function(v) {
-                if (v.notFound) return;
+            this.objects.forEach(function(object) {
+                if (object.notFound) return;
 
-                var node = filterEntity(v) ?
+                var node = filterEntity(object) ?
                         this.$node.find('.entities-container') :
                         this.$node.find('.artifacts-container'),
-                    type = filterArtifacts(v) ? 'artifact' : 'entity',
-                    subType = F.vertex.displayType(v),
-                    $newPane = $('<div class="detail-pane visible highlight-none"><div class="content"/></div>')
+                    type = filterArtifacts(object) ? 'artifact' : 'entity',
+                    subType = F.vertex.displayType(object),
+                    $newPane = $('<div class="detail-pane visible highlight-none">')
                         .addClass('type-' + type +
                                   (subType ? (' subType-' + subType) : '') +
-                                  ' ' + F.className.to(v.id))
+                                  ' ' + F.className.to(object.id))
+                        .append('<div class="content">')
                         .appendTo(node)
-                        .find('.content');
+                        .find('.content')
+                        .append('<div class="type-content">')
+                        .find('.type-content');
 
-                Detail.attachTo($newPane, {
-                    loadGraphVertexData: v,
-                    highlightStyle: 2
+                this.on('finishedLoadingTypeContent', function handler() {
+                    this.off('finishedLoadingTypeContent', handler);
+                    this.$node.find('.org-visallo-layout-body').css('flex', 'none');
+                    this.$node.find('.org-visallo-layout-root').css('overflow', 'visible');
                 });
+
+                var constraints = this.objects.length === 1 ? [] : ['width'];
+                Detail.attachTo($newPane, { model: object, constraints: constraints });
             }.bind(this));
 
             if (data && data.preventRecursiveUrlChange !== true) {
@@ -239,8 +319,21 @@ define([
                 self.actualWorkspaceId = workspace.workspaceId;
                 self.off(document, 'workspaceLoaded', loaded);
 
-                self.dataRequest('vertex', 'store', { vertexIds: self.attr.graphVertexIds })
-                    .then(self.handleVerticesLoaded.bind(self))
+                Promise.all([
+                        self.attr.vertexIds.length ?
+                            self.dataRequest('vertex', 'store', {
+                                vertexIds: self.attr.vertexIds
+                            }) : Promise.resolve([]),
+                        self.attr.edgeIds.length ?
+                            self.dataRequest('edge', 'store', {
+                                edgeIds: self.attr.edgeIds
+                            }) : Promise.resolve([])
+                    ])
+                    .then(function(results) {
+                        var vertices = results.shift(),
+                            edges = results.shift();
+                        self.handleObjectsLoaded(_.compact(vertices.concat(edges)));
+                    })
                     .catch(self.handleVerticesFailed.bind(self))
             });
             if (workspaceId) {
@@ -269,17 +362,22 @@ define([
                 } else deferred.resolve();
             } else deferred.resolve();
 
-            var toRemove = _.difference(this.attr.graphVertexIds, data.graphVertexIds),
-                toAdd = _.difference(data.graphVertexIds, this.attr.graphVertexIds);
+            var vertexIds = _.difference(data.vertexIds, this.attr.vertexIds);
+            var edgeIds = _.difference(data.edgeIds, this.attr.edgeIds);
 
-            if (data.graphVertexIds) {
-                this.attr.graphVertexIds = data.graphVertexIds;
-            }
+            var toRemove = [];
+            toRemove.concat(
+                _.difference(this.attr.vertexIds, data.vertexIds),
+                _.difference(this.attr.edgeIds, data.edgeIds)
+            );
 
             deferred.done(function() {
-                self.updateVertices({
+                self.updateItems({
                     remove: toRemove,
-                    add: toAdd,
+                    add: {
+                        vertexIds: vertexIds,
+                        edgeIds: edgeIds
+                    },
                     preventRecursiveUrlChange: true
                 });
             })
@@ -293,27 +391,36 @@ define([
             }
         };
 
-        this.updateVertices = function(data) {
+        this.updateItems = function(data) {
             var self = this,
                 willRemove = !_.isEmpty(data.remove),
-                willAdd = !_.isEmpty(data.add);
+                willAdd = !_.isEmpty(data.add) && !!(data.add.vertexIds.length || data.add.edgeIds.length);
 
             if (!willRemove && !willAdd) {
                 return;
             }
 
             if (willAdd) {
-                return this.dataRequest('vertex', 'store', {
-                    vertexIds: _.uniq(data.add.concat(_.pluck(this.vertices, 'id')))
-                })
-                    .then(function(vertices) {
-                        self.handleVerticesLoaded(vertices, data);
-                    });
+                var vertexIds = this.attr.vertexIds = _.uniq(data.add.vertexIds.concat(self.attr.vertexIds));
+                var edgeIds = this.attr.edgeIds = _.uniq(data.add.edgeIds.concat(self.attr.edgeIds));
+                Promise.all([
+                    vertexIds.length ?
+                        self.dataRequest('vertex', 'store', {
+                            vertexIds: vertexIds
+                        }) : Promise.resolve([]),
+                    edgeIds.length ?
+                        self.dataRequest('edge', 'store', {
+                            edgeIds: edgeIds
+                        }) : Promise.resolve([])
+                    ])
+                    .then(function(results) {
+                        self.handleObjectsLoaded(_.flatten(results), data);
+                    })
             }
 
             if (willRemove) {
-                data.remove.forEach(function(vertexId) {
-                    var $pane = self.$node.find('.detail-pane.' + F.className.to(vertexId));
+                data.remove.forEach(function(id) {
+                    var $pane = self.$node.find('.detail-pane.' + F.className.to(id));
                     if ($pane.length) {
                         $pane
                             .find('.content').teardownAllComponents()
@@ -322,8 +429,8 @@ define([
                     }
                 });
 
-                this.vertices = _.reject(this.vertices, function(v) {
-                    return _.contains(data.remove, v.id);
+                this.objects = _.reject(this.objects, function(object) {
+                    return _.contains(data.remove, object.id);
                 });
             }
 
@@ -332,29 +439,6 @@ define([
             }
             self.updateLayout();
             self.updateTitle();
-        };
-
-        this.addVertexIds = function(vertexIds, targetIdentifier) {
-            var self = this;
-
-            if (targetIdentifier !== this.fullscreenIdentifier) {
-                return;
-            }
-
-            var existingVertexIds = _.pluck(this.vertices, 'id'),
-                newVertices = _.reject(vertexIds, function(v) {
-                    return existingVertexIds.indexOf(v) >= 0;
-                });
-
-            if (newVertices.length === 0) {
-                return;
-            }
-
-            this.dataRequest('vertex', 'store', { vertexIds: existingVertexIds.concat(newVertices) })
-                .done(function(vertices) {
-                    self.handleVerticesLoaded(vertices);
-                    self.flashTitle(newVertices);
-                })
         };
 
         this.flashTitle = function(newVertexIds, newVertices) {
@@ -390,11 +474,11 @@ define([
         };
 
         this.titleForVertices = function() {
-            if (!this.vertices || this.vertices.length === 0) {
+            if (!this.objects || this.objects.length === 0) {
                 return i18n('fullscreen.loading');
             }
 
-            var sorted = _.sortBy(this.vertices, function(v) {
+            var sorted = _.sortBy(this.objects, function(v) {
                 return v.notFound ? 1 : -1;
             });
 

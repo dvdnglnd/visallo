@@ -9,11 +9,13 @@ import org.visallo.core.model.WorkQueueNames;
 import org.visallo.core.model.WorkerBase;
 import org.visallo.core.model.user.UserRepository;
 import org.visallo.core.model.workQueue.WorkQueueRepository;
+import org.visallo.core.status.MetricsManager;
 import org.visallo.core.status.StatusRepository;
 import org.visallo.core.status.StatusServer;
 import org.visallo.core.status.model.LongRunningProcessRunnerStatus;
 import org.visallo.core.status.model.ProcessStatus;
 import org.visallo.core.user.User;
+import org.visallo.core.util.StoppableRunnable;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
 
@@ -21,7 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-public class LongRunningProcessRunner extends WorkerBase {
+public class LongRunningProcessRunner extends WorkerBase<LongRunningProcessWorkerItem> {
     private static final VisalloLogger LOGGER = VisalloLoggerFactory.getLogger(LongRunningProcessRunner.class);
     private UserRepository userRepository;
     private LongRunningProcessRepository longRunningProcessRepository;
@@ -35,9 +37,10 @@ public class LongRunningProcessRunner extends WorkerBase {
     public LongRunningProcessRunner(
             WorkQueueRepository workQueueRepository,
             StatusRepository statusRepository,
-            Configuration configuration
+            Configuration configuration,
+            MetricsManager metricsManager
     ) {
-        super(workQueueRepository, configuration);
+        super(workQueueRepository, configuration, metricsManager);
         this.statusRepository = statusRepository;
     }
 
@@ -57,7 +60,8 @@ public class LongRunningProcessRunner extends WorkerBase {
         LongRunningWorkerPrepareData workerPrepareData = new LongRunningWorkerPrepareData(
                 map,
                 this.user,
-                InjectHelper.getInjector());
+                InjectHelper.getInjector()
+        );
         for (LongRunningProcessWorker worker : InjectHelper.getInjectedServices(LongRunningProcessWorker.class, configuration)) {
             try {
                 LOGGER.info("preparing: %s", worker.getClass().getName());
@@ -84,7 +88,13 @@ public class LongRunningProcessRunner extends WorkerBase {
     }
 
     @Override
-    public void process(Object messageId, JSONObject longRunningProcessQueueItem) {
+    protected LongRunningProcessWorkerItem tupleDataToWorkerItem(byte[] data) {
+        return new LongRunningProcessWorkerItem(data);
+    }
+
+    @Override
+    public void process(LongRunningProcessWorkerItem workerItem) {
+        JSONObject longRunningProcessQueueItem = workerItem.getJson();
         LOGGER.info("process long running queue item %s", longRunningProcessQueueItem.toString());
 
         for (LongRunningProcessWorker worker : workers) {
@@ -136,5 +146,47 @@ public class LongRunningProcessRunner extends WorkerBase {
     @Inject
     public void setConfiguration(Configuration configuration) {
         this.configuration = configuration;
+    }
+
+    public static List<StoppableRunnable> startThreaded(int threadCount, Configuration config) {
+        List<StoppableRunnable> stoppables = new ArrayList<>();
+
+        LOGGER.info("Starting LongRunningProcessRunners on %d threads", threadCount);
+        for (int i = 0; i < threadCount; i++) {
+            StoppableRunnable stoppable = new StoppableRunnable() {
+                private LongRunningProcessRunner longRunningProcessRunner = null;
+
+                @Override
+                public void run() {
+                    try {
+                        longRunningProcessRunner = InjectHelper.getInstance(LongRunningProcessRunner.class);
+                        longRunningProcessRunner.prepare(config.toMap());
+                        longRunningProcessRunner.run();
+                    } catch (Exception ex) {
+                        LOGGER.error("Failed running LongRunningProcessRunner", ex);
+                    }
+                }
+
+                @Override
+                public void stop() {
+                    try {
+                        if (longRunningProcessRunner != null) {
+                            LOGGER.debug("Stopping LongRunningProcessRunner");
+                            longRunningProcessRunner.stop();
+                        }
+                    } catch (Exception ex) {
+                        LOGGER.error("Failed stopping LongRunningProcessRunner", ex);
+                    }
+                }
+            };
+            stoppables.add(stoppable);
+            Thread t = new Thread(stoppable);
+            t.setName("long-running-process-runner-" + t.getId());
+            t.setDaemon(true);
+            LOGGER.debug("Starting LongRunningProcessRunner thread: %s", t.getName());
+            t.start();
+        }
+
+        return stoppables;
     }
 }

@@ -1,8 +1,9 @@
 
 define([
     '../util/ajax',
-    './storeHelper'
-], function(ajax, storeHelper) {
+    './storeHelper',
+    'require'
+], function(ajax, storeHelper, require) {
     'use strict';
 
     var api = {
@@ -29,12 +30,18 @@ define([
             });
         },
 
-        setProperty: function(edgeId, property, optionalWorkspaceId) {
-            var url = '/edge/' + (
-                property.name === 'http://visallo.org/comment#entry' ?
-                'comment' : 'property'
-            );
+        setPropertyVisibility: function(edgeId, property) {
+            return ajax('POST', '/edge/property/visibility', {
+                graphEdgeId: edgeId,
+                newVisibilitySource: property.visibilitySource,
+                oldVisibilitySource: property.oldVisibilitySource,
+                propertyKey: property.key,
+                propertyName: property.name
+            })
+        },
 
+        setProperty: function(edgeId, property, optionalWorkspaceId) {
+            var url = storeHelper.edgePropertyUrl(property);
             return ajax('POST', url, _.tap({
                  edgeId: edgeId,
                  propertyName: property.name,
@@ -54,38 +61,51 @@ define([
                 if (optionalWorkspaceId) {
                     params.workspaceId = optionalWorkspaceId;
                 }
-            }));
+            })).tap(storeHelper.updateElement);
         },
 
         deleteProperty: function(edgeId, property) {
-            return ajax('DELETE', '/edge/property', {
+            var url = storeHelper.edgePropertyUrl(property);
+            return ajax('DELETE', url, {
                 edgeId: edgeId,
                 propertyName: property.name,
                 propertyKey: property.key
             })
         },
 
-        multiple: function(options) {
-            return ajax('POST', '/edge/multiple', options);
+        details: function(edgeId) {
+            return ajax('GET', '/edge/details', { edgeId: edgeId });
         },
 
-        store: storeHelper.createStoreAccessorOrDownloader(
-            'edge', 'edgeIds', 'edges',
-            function(toRequest) {
-                return api.multiple({
-                    edgeIds: toRequest
-                });
-            }),
+        history: function(edgeId) {
+            return ajax('GET', '/edge/history', {
+                graphEdgeId: edgeId
+            });
+        },
+
+        propertyHistory: function(edgeId, property, options) {
+            return ajax('GET', '/edge/property/history', _.extend(
+                {},
+                options || {},
+                {
+                    graphEdgeId: edgeId,
+                    propertyName: property.name,
+                    propertyKey: property.key
+                }
+            ));
+        },
+
+        multiple: storeHelper.createStoreAccessorOrDownloader('edge'),
+
+        store: function(options) {
+            return api.multiple(options);
+        },
 
         setVisibility: function(edgeId, visibilitySource) {
             return ajax('POST', '/edge/visibility', {
                 graphEdgeId: edgeId,
                 visibilitySource: visibilitySource
-            });
-        },
-
-        acl: function(edgeId) {
-            return ajax('GET', '/edge/acl', { elementId: edgeId });
+            }).tap(storeHelper.updateElement);
         }
     };
 

@@ -6,31 +6,46 @@ import org.visallo.core.externalResource.ExternalResourceRunner;
 import org.visallo.core.model.user.UserRepository;
 import org.visallo.core.status.StatusRepository;
 import org.visallo.core.user.User;
+import org.visallo.core.util.ShutdownListener;
+import org.visallo.core.util.ShutdownService;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
 
-public class ExternalResourceWorkersInitializer extends ApplicationBootstrapInitializer {
+import javax.servlet.ServletContext;
+
+public class ExternalResourceWorkersInitializer extends ApplicationBootstrapInitializer implements ShutdownListener {
     private static final VisalloLogger LOGGER = VisalloLoggerFactory.getLogger(ExternalResourceWorkersInitializer.class);
     private final Configuration config;
     private final UserRepository userRepository;
     private final StatusRepository statusRepository;
+    private ExternalResourceRunner resourceRunner;
 
     @Inject
     public ExternalResourceWorkersInitializer(
             Configuration config,
             UserRepository userRepository,
-            StatusRepository statusRepository
+            StatusRepository statusRepository,
+            ShutdownService shutdownService
     ) {
         this.config = config;
         this.userRepository = userRepository;
         this.statusRepository = statusRepository;
+        shutdownService.register(this);
     }
 
     @Override
-    public void initialize() {
+    public void initialize(ServletContext context) {
         LOGGER.debug("setupExternalResourceWorkers");
 
         final User user = userRepository.getSystemUser();
-        new ExternalResourceRunner(config, statusRepository, user).startAll();
+        resourceRunner = new ExternalResourceRunner(config, statusRepository, user);
+        resourceRunner.startAll();
+    }
+
+    @Override
+    public void shutdown() {
+        if (resourceRunner != null) {
+            resourceRunner.shutdown();
+        }
     }
 }

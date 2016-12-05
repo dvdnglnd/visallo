@@ -10,14 +10,17 @@ import org.visallo.core.model.ontology.Concept;
 import org.visallo.core.model.ontology.OntologyProperty;
 import org.visallo.core.model.ontology.OntologyRepository;
 import org.visallo.core.model.ontology.Relationship;
+import org.visallo.core.model.user.PrivilegeRepository;
 import org.visallo.core.util.ClassUtil;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
+import org.visallo.web.clientapi.model.Privilege;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Responsible for parsing application configuration file and providing
@@ -38,7 +41,7 @@ public class Configuration {
     public static final String USER_REPOSITORY = "repository.user";
     public static final String SEARCH_REPOSITORY = "repository.search";
     public static final String WORKSPACE_REPOSITORY = "repository.workspace";
-    public static final String AUTHORIZATION_REPOSITORY = "repository.authorization";
+    public static final String GRAPH_AUTHORIZATION_REPOSITORY = "repository.graphAuthorization";
     public static final String ONTOLOGY_REPOSITORY = "repository.ontology";
     public static final String USER_SESSION_COUNTER_REPOSITORY = "repository.userSessionCounter";
     public static final String WORK_QUEUE_REPOSITORY = "repository.workQueue";
@@ -52,11 +55,13 @@ public class Configuration {
     public static final String ONTOLOGY_REPOSITORY_OWL = "repository.ontology.owl";
     public static final String ACL_PROVIDER_REPOSITORY = "repository.acl";
     public static final String FILE_SYSTEM_REPOSITORY = "repository.fileSystem";
+    public static final String AUTHORIZATION_REPOSITORY = "repository.authorization";
+    public static final String PRIVILEGE_REPOSITORY = "repository.privilege";
     public static final String GRAPH_PROVIDER = "graph";
     public static final String VISIBILITY_TRANSLATOR = "security.visibilityTranslator";
-    public static final String DEFAULT_PRIVILEGES = "newuser.privileges";
     public static final String WEB_CONFIGURATION_PREFIX = "web.ui.";
     public static final String WEB_GEOCODER_ENABLED = WEB_CONFIGURATION_PREFIX + "geocoder.enabled";
+    public static final String MAPZEN_ENABLED = WEB_CONFIGURATION_PREFIX + "mapzen.enabled";
     public static final String MAPZEN_TILE_API_KEY = "mapzen.tile.api.key";
     public static final String DEV_MODE = "devMode";
     public static final boolean DEV_MODE_DEFAULT = false;
@@ -71,16 +76,19 @@ public class Configuration {
     public static final String DEFAULT_STATUS_ZK_PATH = "/visallo/status";
     public static final String STATUS_PORT_RANGE = "status.portRange";
     public static final String DEFAULT_STATUS_PORT_RANGE = "40000-41000";
-    public static final String BROADCAST_EXCHANGE_NAME_CONFIGURATION = "rabbitmq.broadcastExchangeName";
-
+    public static final String COMMENTS_AUTO_PUBLISH = "comments.autoPublish";
+    public static final boolean DEFAULT_COMMENTS_AUTO_PUBLISH = false;
     public static final String STATUS_REFRESH_INTERVAL_SECONDS = "status.refreshIntervalSeconds";
     public static final int STATUS_REFRESH_INTERVAL_SECONDS_DEFAULT = 10;
     public static final String STATUS_ENABLED = "status.enabled";
     public static final boolean STATUS_ENABLED_DEFAULT = true;
     public static final String SYSTEM_PROPERTY_PREFIX = "visallo.";
 
+    public static final String HTTP_GZIP_ENABLED = "http.gzipEnabled";
+
     private final ConfigurationLoader configurationLoader;
     private final VisalloResourceBundleManager visalloResourceBundleManager;
+    private PrivilegeRepository privilegeRepository;
 
     private Map<String, String> config = new HashMap<>();
 
@@ -116,14 +124,6 @@ public class Configuration {
             String entryValue = entry.getValue();
             if (!StringUtils.isBlank(entryValue)) {
                 entry.setValue(StrSubstitutor.replace(entryValue, config));
-            }
-        }
-    }
-
-    public void setDefaults(final Map<String, String> defaults) {
-        for (Map.Entry entry : defaults.entrySet()) {
-            if (entry.getValue() != null && config.get(entry.getKey().toString()) == null) {
-                set(entry.getKey().toString(), entry.getValue());
             }
         }
     }
@@ -177,12 +177,12 @@ public class Configuration {
         return subset;
     }
 
-    public void setConfigurables(Object o, String keyPrefix) {
+    public <T> T setConfigurables(T o, String keyPrefix) {
         Map<String, String> subset = getSubset(keyPrefix);
-        setConfigurables(o, subset);
+        return setConfigurables(o, subset);
     }
 
-    public void setConfigurables(Object o, Map<String, String> config) {
+    public static <T> T setConfigurables(T o, Map<String, String> config) {
         ConvertUtilsBean convertUtilsBean = new ConvertUtilsBean();
         Map<Method, PostConfigurationValidator> validatorMap = new HashMap<>();
 
@@ -219,9 +219,11 @@ public class Configuration {
                 throw new VisalloException("IllegalAccessException invoking validator " + o.getClass().getName() + "." + postConfigurationValidatorMethod.getName(), e);
             }
         }
+
+        return o;
     }
 
-    private List<Field> getAllFields(Object o) {
+    private static List<Field> getAllFields(Object o) {
         List<Field> fields = new ArrayList<>();
         Class c = o.getClass();
         while (c != null) {
@@ -231,7 +233,7 @@ public class Configuration {
         return fields;
     }
 
-    private void setConfigurablesMethod(Object o, Method m, Map<String, String> config, ConvertUtilsBean convertUtilsBean) {
+    private static void setConfigurablesMethod(Object o, Method m, Map<String, String> config, ConvertUtilsBean convertUtilsBean) {
         Configurable configurableAnnotation = m.getAnnotation(Configurable.class);
         if (configurableAnnotation == null) {
             return;
@@ -256,7 +258,7 @@ public class Configuration {
         } else {
             if (Configurable.DEFAULT_VALUE.equals(defaultValue)) {
                 if (configurableAnnotation.required()) {
-                    throw new VisalloException("Could not find property " + name + " for " + o.getClass().getName() + " and no default value was specified.");
+                    throw new VisalloException(String.format("Could not find property \"%s\" for \"%s\" and no default value was specified.", name, o.getClass().getName()));
                 } else {
                     return;
                 }
@@ -271,7 +273,7 @@ public class Configuration {
         }
     }
 
-    private void setConfigurablesField(Object o, Field f, Map<String, String> config, ConvertUtilsBean convertUtilsBean) {
+    private static void setConfigurablesField(Object o, Field f, Map<String, String> config, ConvertUtilsBean convertUtilsBean) {
         Configurable configurableAnnotation = f.getAnnotation(Configurable.class);
         if (configurableAnnotation == null) {
             return;
@@ -385,6 +387,12 @@ public class Configuration {
             }
         }
 
+        PrivilegeRepository privilegeRepository = getPrivilegeRepository();
+        Set<String> allPrivileges = privilegeRepository.getAllPrivileges().stream()
+                .map(Privilege::getName)
+                .collect(Collectors.toSet());
+        properties.put("privileges", Privilege.toJson(allPrivileges));
+
         JSONObject messages = new JSONObject();
         if (resourceBundle != null) {
             for (String key : resourceBundle.keySet()) {
@@ -399,6 +407,13 @@ public class Configuration {
         return configuration;
     }
 
+    private PrivilegeRepository getPrivilegeRepository() {
+        if (privilegeRepository == null) {
+            privilegeRepository = InjectHelper.getInstance(PrivilegeRepository.class);
+        }
+        return privilegeRepository;
+    }
+
     public JSONObject getJsonProperties() {
         JSONObject properties = new JSONObject();
         for (String key : config.keySet()) {
@@ -411,6 +426,57 @@ public class Configuration {
         return properties;
     }
 
+    /**
+     * Similar to {@link Configuration#getMultiValue(java.lang.String)}, but returns a new instance of
+     * a configurable type for each prefix.
+     * <p>
+     * Given the following configuration:
+     * <p>
+     * <pre><code>
+     * repository.ontology.owl.dev.iri=http://visallo.org/dev
+     * repository.ontology.owl.dev.dir=examples/ontology-dev/
+     *
+     * repository.ontology.owl.csv.iri=http://visallo.org/csv
+     * repository.ontology.owl.csv.dir=storm/plugins/csv/ontology/
+     * </pre></code>
+     *
+     * And the following class.
+     *
+     * <pre><code>
+     * class OwlItem {
+     *   {@literal @}Configurable
+     *   public String iri;
+     *
+     *   {@literal @}Configurable
+     *   public String dir;
+     * }
+     * </pre></code>
+     *
+     * Would produce a map with two keys "dev" and "csv" mapped to an OwlItem object.
+     *
+     * @param prefix           The configuration key prefix
+     * @param configurableType The type of each configurable object to create instances of
+     */
+    public <T> Map<String, T> getMultiValueConfigurables(String prefix, Class<T> configurableType) {
+        Map<String, Map<String, String>> multiValues = getMultiValue(prefix);
+        Map<String, T> results = new HashMap<>();
+        for (Map.Entry<String, Map<String, String>> entry : multiValues.entrySet()) {
+            T o;
+            try {
+                o = configurableType.newInstance();
+            } catch (Exception e) {
+                throw new VisalloException("Could not create configurable: " + configurableType.getName(), e);
+            }
+            setConfigurables(o, entry.getValue());
+            results.put(entry.getKey(), o);
+        }
+        return results;
+    }
+
+    /**
+     * Similar to {@link Configuration#getMultiValue(java.lang.Iterable, java.lang.String)} but uses the internal
+     * configuration state.
+     */
     public Map<String, Map<String, String>> getMultiValue(String prefix) {
         return getMultiValue(this.config.entrySet(), prefix);
     }
@@ -418,11 +484,13 @@ public class Configuration {
     /**
      * Processing configuration items that looks like this:
      * <p/>
+     * <pre><code>
      * repository.ontology.owl.dev.iri=http://visallo.org/dev
      * repository.ontology.owl.dev.dir=examples/ontology-dev/
-     * <p/>
+     *
      * repository.ontology.owl.csv.iri=http://visallo.org/csv
      * repository.ontology.owl.csv.dir=storm/plugins/csv/ontology/
+     * </pre></code>
      * <p/>
      * Into a hash like this:
      * <p/>

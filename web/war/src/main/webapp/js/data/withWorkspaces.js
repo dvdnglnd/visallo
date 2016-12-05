@@ -4,7 +4,7 @@ define(['util/undoManager'], function(UndoManager) {
     return withWorkspaces;
 
     function withWorkspaces() {
-        var lastReloadedState,
+        var workspace,
             undoManagersPerWorkspace = {};
 
         this.after('initialize', function() {
@@ -14,46 +14,48 @@ define(['util/undoManager'], function(UndoManager) {
 
             this.on('loadCurrentWorkspace', this.onLoadCurrentWorkspace);
             this.on('switchWorkspace', this.onSwitchWorkspace);
-            this.on('reloadWorkspace', this.onReloadWorkspace);
             this.on('updateWorkspace', this.onUpdateWorkspace);
-            this.on('loadEdges', this.onLoadEdges);
 
-            this.on(window, 'keydown', function(event) {
-                var character = String.fromCharCode(event.which).toUpperCase();
+            visalloData.storePromise.then(store => {
+                const selectId = (s) => s.workspace.currentId || null;
+                const select = (s) => selectId(s) && s.workspace.byId[selectId(s)] || null;
 
-                if (_isUndo(character, event)) {
-                    perform('performUndo');
-                    event.preventDefault();
-                }
+                let previous = store.getState();
 
-                if (_isRedo(character, event)) {
-                    perform('performRedo');
-                    event.preventDefault();
-                }
+                store.subscribe(() => {
+                    const state = store.getState()
+                    const oldWorkspace = select(previous);
+                    const newWorkspace = select(state);
+                    const changed = newWorkspace && (!oldWorkspace || oldWorkspace.workspaceId !== newWorkspace.workspaceId);
 
-                function perform(type) {
-                    var undoManager = undoManagersPerWorkspace[self.visalloData.currentWorkspaceId];
-                    if (undoManager) {
-                        undoManager[type]();
+                    if (changed) {
+                        workspace = {...newWorkspace};
+                        this.setPublicApi('currentWorkspaceId', workspace.workspaceId);
+                        this.setPublicApi('currentWorkspaceName', workspace.title);
+                        this.setPublicApi('currentWorkspaceEditable', workspace.editable);
+                        this.setPublicApi('currentWorkspaceCommentable', workspace.commentable);
+                        this.trigger('workspaceLoaded', workspace);
+                        this.trigger('selectObjects');
+                        this.fireApplicationReadyOnce();
+                    } else {
+                        _.each(state.workspace.byId, (workspace, id) => {
+                            const workspaceChanged = previous.workspace.byId[id] && previous.workspace.byId[id] !== workspace;
+                            if (workspaceChanged) {
+                                this.setPublicApi('currentWorkspaceName', workspace.title);
+                                this.setPublicApi('currentWorkspaceEditable', workspace.editable);
+                                this.setPublicApi('currentWorkspaceCommentable', workspace.commentable);
+                                this.trigger('workspaceUpdated', { workspace })
+                            }
+                        });
+                        const deletedKeys = Object.keys(_.omit(previous.workspace.byId, Object.keys(state.workspace.byId)));
+                        if (deletedKeys.length) {
+                            deletedKeys.forEach(workspaceId => {
+                                this.trigger('workspaceDeleted', { workspaceId });
+                            })
+                        }
                     }
-                }
-
-                function _isUndo(character, event) {
-                    return (
-                        // Windows
-                        (character === 'Z' && event.ctrlKey) ||
-                        // Mac
-                        (character === 'Z' && event.metaKey && !event.shiftKey)
-                    );
-                }
-                function _isRedo(character, event) {
-                    return (
-                        // Windows
-                        (character === 'Y' && event.ctrlKey) ||
-                        // Mac
-                        (character === 'Z' && event.metaKey && event.shiftKey)
-                    );
-                }
+                    previous = state;
+                })
             })
         });
 
@@ -62,30 +64,13 @@ define(['util/undoManager'], function(UndoManager) {
             this.trigger('switchWorkspace', { workspaceId: currentWorkspaceId });
         };
 
-        this.onReloadWorkspace = function() {
-            if (lastReloadedState) {
-                this.workspaceLoaded(lastReloadedState);
-                this.edgesLoaded(lastReloadedState.edges);
-            }
-        };
-
-        this.onLoadEdges = function(event, data) {
-            var self = this;
-            this.dataRequestPromise.done(function(dataRequest) {
-                dataRequest('workspace', 'edges', data && data.workspaceId, data && data.vertexIds)
-                    .done(function(edges) {
-                        self.edgesLoaded({ edges: edges });
-                    })
-            });
-        };
-
         this.onSwitchWorkspace = function(event, data) {
-            lastReloadedState = {};
             this.setPublicApi('currentWorkspaceId', data.workspaceId);
-            this.setPublicApi('currentWorkspaceEditable', data.editable);
-            this.worker.postMessage({
-                type: 'workspaceSwitch',
-                workspaceId: data.workspaceId
+            Promise.all([
+                visalloData.storePromise,
+                Promise.require('data/web-worker/store/workspace/actions')
+            ]).spread(function(store, workspaceActions) {
+                store.dispatch(workspaceActions.setCurrent(data.workspaceId))
             });
         };
 
@@ -94,110 +79,36 @@ define(['util/undoManager'], function(UndoManager) {
                 triggered = false,
                 buffer = _.delay(function() {
                     triggered = true;
-                    self.trigger('workspaceSaving', lastReloadedState.workspace);
-                }, 250);
+                    self.trigger('workspaceSaving', workspace);
+                }, 250),
+                result,
+                legacyKeys = ['entityUpdates', 'entityDeletes'],
+                legacy = _.pick(data, legacyKeys);
 
-            if (!data.ignoreUndoManager && (!_.isEmpty(data.entityUpdates) || !_.isEmpty(data.entityDeletes))) {
-                var invertData = inverse(data, lastReloadedState.workspace.vertices),
-                    undoManager = undoManagerForWorkspace(lastReloadedState.workspace.workspaceId);
-                undoManager.performedAction('Workspace Update', {
-                    undo: function() {
-                        self.trigger('updateWorkspace', $.extend({}, invertData, { ignoreUndoManager: true }));
-                    },
-                    redo: function() {
-                        self.trigger('updateWorkspace', $.extend({}, data, { ignoreUndoManager: true }));
-                    }
-                })
+            if (legacy.length) {
+                data = _.omit(data, legacyKeys);
+                console.warn('updateWorkspace no longer accepts entity changes');
             }
 
-            this.dataRequestPromise.done(function(dataRequest) {
-                dataRequest('workspace', 'save', data)
-                    .then(function(data) {
-                        clearTimeout(buffer);
-                        if (data.saved) {
-                            self.trigger('workspaceSaved', lastReloadedState.workspace);
-                        }
-                    })
-                    .finally(function() {
-                        if (triggered) {
-                            self.trigger('workspaceSaved', lastReloadedState.workspace);
-                        }
-                    })
-                    .done();
-            });
-        };
-
-        // Worker Handlers
-
-        this.edgesLoaded = function(message) {
-            lastReloadedState.edges = message;
-            this.trigger('edgesLoaded', message);
-        };
-
-        this.workspaceUpdated = function(message) {
-            if (lastReloadedState &&
-                lastReloadedState.workspace &&
-                lastReloadedState.workspace.workspaceId === message.workspace.workspaceId) {
-                lastReloadedState.workspace = message.workspace;
-            }
-            this.trigger('workspaceUpdated', message);
-            if (message.newVertices.length) {
-                this.trigger('loadEdges', {
-                    workspaceId: message.workspace.workspaceId,
-                    vertexIds: _.pluck(message.newVertices, 'id')
+            if (!_.isEmpty(data)) {
+                this.dataRequestPromise.then(function(dataRequest) {
+                    dataRequest('workspace', 'save', data)
+                        .then(function(data) {
+                            clearTimeout(buffer);
+                            if (data.saved) {
+                                triggered = true;
+                            }
+                        })
+                        .catch(function(e) {
+                            console.error(e);
+                        })
+                        .then(function() {
+                            if (triggered) {
+                                self.trigger('workspaceSaved', result);
+                            }
+                        })
                 });
             }
         };
-
-        this.workspaceLoaded = function(message) {
-            lastReloadedState = message;
-            var workspace = message.workspace;
-            workspace.data = {
-                vertices: message.vertices
-            };
-            this.setPublicApi('currentWorkspaceId', workspace.workspaceId);
-            this.setPublicApi('currentWorkspaceEditable', workspace.editable);
-            this.setPublicApi('currentWorkspaceCommentable', workspace.commentable);
-            this.trigger('workspaceLoaded', workspace);
-            this.trigger('selectObjects');
-            this.fireApplicationReadyOnce();
-        };
-
-        function undoManagerForWorkspace(workspaceId) {
-            var undoManager = undoManagersPerWorkspace[workspaceId];
-            if (!undoManager) {
-                undoManager = undoManagersPerWorkspace[workspaceId] = new UndoManager();
-            }
-            return undoManager;
-        }
-
-        function padWorkspaceUpdate(workspaceUpdates) {
-            'entityUpdates entityDeletes userUpdates userDeletes'.split(' ').forEach(function(k) {
-                if (!(k in workspaceUpdates)) {
-                    workspaceUpdates[k] = [];
-                }
-            });
-            return workspaceUpdates;
-        }
-
-        function inverse(workspaceUpdates, workspaceVertices) {
-            var inverted = {
-                entityUpdates: [],
-                entityDeletes: []
-            };
-
-            if (workspaceUpdates.entityUpdates) {
-                workspaceUpdates.entityUpdates.forEach(function(update) {
-                    inverted.entityUpdates.push($.extend(true, {}, workspaceVertices[update.vertexId]));
-                })
-            }
-            if (workspaceUpdates.entityDeletes) {
-                workspaceUpdates.entityDeletes.forEach(function(update) {
-                    inverted.entityUpdates.push($.extend(true, {}, workspaceVertices[update]));
-                })
-            }
-
-            return inverted;
-        }
     }
 });

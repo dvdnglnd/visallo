@@ -6,7 +6,6 @@
   position: absolute;
   left: @menubar-width + @padding;
   top: @padding;
-  cursor: pointer;
   .above-graph(2);
   .disable-text-selection;
 
@@ -29,8 +28,11 @@
     position: relative;
     border-radius: 2px;
 
-    &.canDismiss {
-      cursor: pointer;
+    &.expanded-notification {
+      h1, h2 {
+        word-break: break-word;
+        white-space: normal;
+      }
     }
 
     h1, h2 {
@@ -156,6 +158,14 @@
         text-shadow: none;
       }
       padding-left: 28px;
+      max-width: 70em;
+
+      &.expanded-notification {
+        h1, h2 {
+            word-break: break-word;
+            white-space: normal;
+        }
+      }
 
       &.informational {
         h1 {

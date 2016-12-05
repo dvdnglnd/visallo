@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import org.visallo.web.clientapi.util.ClientApiConverter;
 
 import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class VisibilityJson {
@@ -35,7 +37,9 @@ public class VisibilityJson {
     }
 
     public void addWorkspace(String workspaceId) {
-        workspaces.add(workspaceId);
+        if (workspaceId != null) {
+            workspaces.add(workspaceId);
+        }
     }
 
     @Override
@@ -81,16 +85,14 @@ public class VisibilityJson {
         return json;
     }
 
-    public static VisibilityJson updateVisibilitySourceAndAddWorkspaceId(VisibilityJson visibilityJson, String visibilitySource, String workspaceId) {
+    public static VisibilityJson updateVisibilitySourceAndAddWorkspaceId(VisibilityJson visibilityJson,
+                                                                         String visibilitySource, String workspaceId) {
         if (visibilityJson == null) {
             visibilityJson = new VisibilityJson();
         }
 
         visibilityJson.setSource(visibilitySource);
-
-        if (workspaceId != null) {
-            visibilityJson.addWorkspace(workspaceId);
-        }
+        visibilityJson.addWorkspace(workspaceId);
 
         return visibilityJson;
     }
@@ -101,6 +103,20 @@ public class VisibilityJson {
         }
 
         visibilityJson.setSource(visibilitySource);
+        return visibilityJson;
+    }
+
+    public static boolean isVisibilityJson(Map map) {
+        return map.size() == 2 && map.containsKey("source") && map.containsKey("workspaces");
+    }
+
+    public static VisibilityJson fromMap(Map map) {
+        VisibilityJson visibilityJson = new VisibilityJson();
+        visibilityJson.setSource((String) map.get("source"));
+        List<String> workspaces = (List<String>) map.get("workspaces");
+        for (String workspace : workspaces) {
+            visibilityJson.addWorkspace(workspace);
+        }
         return visibilityJson;
     }
 }

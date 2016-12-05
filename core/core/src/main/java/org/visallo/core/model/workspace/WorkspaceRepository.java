@@ -1,8 +1,5 @@
 package org.visallo.core.model.workspace;
 
-import com.google.common.base.Function;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -11,6 +8,8 @@ import org.vertexium.mutation.ElementMutation;
 import org.vertexium.mutation.ExistingElementMutation;
 import org.vertexium.util.ConvertingIterable;
 import org.vertexium.util.IterableUtils;
+import org.visallo.core.bootstrap.InjectHelper;
+import org.visallo.core.config.Configuration;
 import org.visallo.core.exception.VisalloAccessDeniedException;
 import org.visallo.core.exception.VisalloException;
 import org.visallo.core.ingest.graphProperty.ElementOrPropertyStatus;
@@ -19,23 +18,30 @@ import org.visallo.core.model.ontology.OntologyProperty;
 import org.visallo.core.model.ontology.OntologyRepository;
 import org.visallo.core.model.properties.VisalloProperties;
 import org.visallo.core.model.termMention.TermMentionRepository;
+import org.visallo.core.model.user.AuthorizationRepository;
 import org.visallo.core.model.workQueue.Priority;
 import org.visallo.core.model.workQueue.WorkQueueRepository;
+import org.visallo.core.model.workspace.product.Product;
 import org.visallo.core.security.VisalloVisibility;
 import org.visallo.core.security.VisibilityTranslator;
+import org.visallo.core.trace.Traced;
 import org.visallo.core.user.User;
 import org.visallo.core.util.SandboxStatusUtil;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
 import org.visallo.web.clientapi.model.*;
-import org.visallo.web.clientapi.model.ClientApiPublishItem.Action;
 
-import javax.annotation.Nullable;
 import java.io.IOException;
-import java.util.*;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Locale;
+import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.vertexium.util.IterableUtils.toList;
+import static org.visallo.core.util.StreamUtil.stream;
 
 public abstract class WorkspaceRepository {
     public static final String TO_ENTITY_ID_SEPARATOR = "_TO_ENTITY_";
@@ -48,26 +54,33 @@ public abstract class WorkspaceRepository {
     public static final String OWL_IRI = "http://visallo.org/workspace";
     private static final VisalloLogger LOGGER = VisalloLoggerFactory.getLogger(WorkspaceRepository.class);
     private final Graph graph;
+    private final Configuration configuration;
     private final VisibilityTranslator visibilityTranslator;
     private final TermMentionRepository termMentionRepository;
     private final OntologyRepository ontologyRepository;
     private final WorkQueueRepository workQueueRepository;
     private String entityHasImageIri;
+    private final AuthorizationRepository authorizationRepository;
+    private Collection<WorkspaceListener> workspaceListeners;
 
     protected WorkspaceRepository(
-            final Graph graph,
-            final VisibilityTranslator visibilityTranslator,
-            final TermMentionRepository termMentionRepository,
-            final OntologyRepository ontologyRepository,
-            final WorkQueueRepository workQueueRepository
+            Graph graph,
+            Configuration configuration,
+            VisibilityTranslator visibilityTranslator,
+            TermMentionRepository termMentionRepository,
+            OntologyRepository ontologyRepository,
+            WorkQueueRepository workQueueRepository,
+            AuthorizationRepository authorizationRepository
     ) {
         this.graph = graph;
+        this.configuration = configuration;
         this.visibilityTranslator = visibilityTranslator;
         this.termMentionRepository = termMentionRepository;
         this.ontologyRepository = ontologyRepository;
         this.workQueueRepository = workQueueRepository;
 
         this.entityHasImageIri = ontologyRepository.getRelationshipIRIByIntent("entityHasImage");
+        this.authorizationRepository = authorizationRepository;
         if (this.entityHasImageIri == null) {
             LOGGER.warn("'entityHasImage' intent has not been defined. Please update your ontology.");
         }
@@ -107,7 +120,17 @@ public abstract class WorkspaceRepository {
         return add(null, title, user);
     }
 
+    /**
+     * Finds all workspaces the given user has access to. Including workspaces shared to that user.
+     */
     public abstract Iterable<Workspace> findAllForUser(User user);
+
+    /**
+     * Finds all workspaces irregardless of access.
+     *
+     * @param user a user with access to all workspaces such as system user.
+     */
+    public abstract Iterable<Workspace> findAll(User user);
 
     public abstract void setTitle(Workspace workspace, String title, User user);
 
@@ -124,24 +147,27 @@ public abstract class WorkspaceRepository {
     }
 
     public Workspace copyTo(Workspace workspace, User destinationUser, User user) {
-        Workspace newWorkspace = add("Copy of " + workspace.getDisplayTitle(), destinationUser);
-        List<WorkspaceEntity> entities = findEntities(workspace, user);
-        List<Update> updates = Lists.transform(entities, new Function<WorkspaceEntity, Update>() {
-            @Nullable
-            @Override
-            public Update apply(WorkspaceEntity entity) {
-                return new Update(entity.getEntityVertexId(), entity.isVisible(), new GraphPosition(entity.getGraphPositionX(), entity.getGraphPositionY()));
-            }
-        });
-        updateEntitiesOnWorkspace(newWorkspace, updates, destinationUser);
-        return newWorkspace;
+        return add("Copy of " + workspace.getDisplayTitle(), destinationUser);
     }
 
-    public abstract void softDeleteEntitiesFromWorkspace(Workspace workspace, List<String> entityIdsToDelete, User authUser);
+    public abstract void softDeleteEntitiesFromWorkspace(
+            Workspace workspace,
+            List<String> entityIdsToDelete,
+            User authUser
+    );
 
     public abstract void deleteUserFromWorkspace(Workspace workspace, String userId, User user);
 
-    public abstract void updateUserOnWorkspace(Workspace workspace, String userId, WorkspaceAccess workspaceAccess, User user);
+    public abstract UpdateUserOnWorkspaceResult updateUserOnWorkspace(
+            Workspace workspace,
+            String userId,
+            WorkspaceAccess workspaceAccess,
+            User user
+    );
+
+    public enum UpdateUserOnWorkspaceResult {
+        ADD, UPDATE
+    }
 
     public abstract ClientApiWorkspaceDiff getDiff(Workspace workspace, User user, Locale locale, String timeZone);
 
@@ -160,15 +186,15 @@ public abstract class WorkspaceRepository {
 
     public abstract boolean hasReadPermissions(String workspaceId, User user);
 
-    public JSONArray toJson(Iterable<Workspace> workspaces, User user, boolean includeVertices) {
+    public JSONArray toJson(Iterable<Workspace> workspaces, User user) {
         JSONArray resultJson = new JSONArray();
         for (Workspace workspace : workspaces) {
-            resultJson.put(toJson(workspace, user, includeVertices));
+            resultJson.put(toJson(workspace, user));
         }
         return resultJson;
     }
 
-    public JSONObject toJson(Workspace workspace, User user, boolean includeVertices) {
+    public JSONObject toJson(Workspace workspace, User user) {
         checkNotNull(workspace, "workspace cannot be null");
         checkNotNull(user, "user cannot be null");
 
@@ -194,37 +220,17 @@ public abstract class WorkspaceRepository {
             }
             workspaceJson.put("users", usersJson);
 
-            if (includeVertices) {
-                JSONArray verticesJson = new JSONArray();
-                for (WorkspaceEntity workspaceEntity : findEntities(workspace, user)) {
-                    if (!workspaceEntity.isVisible()) {
-                        continue;
-                    }
-
-                    JSONObject vertexJson = new JSONObject();
-                    vertexJson.put("vertexId", workspaceEntity.getEntityVertexId());
-
-                    Integer graphPositionX = workspaceEntity.getGraphPositionX();
-                    Integer graphPositionY = workspaceEntity.getGraphPositionY();
-                    if (graphPositionX != null && graphPositionY != null) {
-                        JSONObject graphPositionJson = new JSONObject();
-                        graphPositionJson.put("x", graphPositionX);
-                        graphPositionJson.put("y", graphPositionY);
-                        vertexJson.put("graphPosition", graphPositionJson);
-                    }
-
-                    verticesJson.put(vertexJson);
-                }
-                workspaceJson.put("vertices", verticesJson);
-            }
-
             return workspaceJson;
         } catch (JSONException e) {
             throw new RuntimeException(e);
         }
     }
 
-    public ClientApiWorkspace toClientApi(Workspace workspace, User user, boolean includeVertices, Authorizations authorizations) {
+    public ClientApiWorkspace toClientApi(
+            Workspace workspace,
+            User user,
+            Authorizations authorizations
+    ) {
         checkNotNull(workspace, "workspace cannot be null");
         checkNotNull(user, "user cannot be null");
 
@@ -234,7 +240,9 @@ public abstract class WorkspaceRepository {
             workspaceClientApi.setTitle(workspace.getDisplayTitle());
 
             String creatorUserId = getCreatorUserId(workspace.getWorkspaceId(), user);
-            if (creatorUserId != null) {
+            if (creatorUserId == null) {
+                workspaceClientApi.setSharedToUser(true);
+            } else {
                 workspaceClientApi.setCreatedBy(creatorUserId);
                 workspaceClientApi.setSharedToUser(!creatorUserId.equals(user.getUserId()));
             }
@@ -249,51 +257,6 @@ public abstract class WorkspaceRepository {
                 workspaceClientApi.addUser(workspaceUser);
             }
 
-            if (includeVertices) {
-                List<WorkspaceEntity> workspaceEntities = findEntities(workspace, user);
-                Iterable<String> workspaceEntityIds = Iterables.transform(workspaceEntities, new Function<WorkspaceEntity, String>() {
-                    @Nullable
-                    @Override
-                    public String apply(WorkspaceEntity workspaceEntity) {
-                        return workspaceEntity.getEntityVertexId();
-                    }
-                });
-                Map<String, Boolean> viewableVertices = getGraph().doVerticesExist(workspaceEntityIds, authorizations);
-                for (WorkspaceEntity workspaceEntity : workspaceEntities) {
-                    if (!workspaceEntity.isVisible()) {
-                        continue;
-                    }
-                    if (!viewableVertices.get(workspaceEntity.getEntityVertexId())) {
-                        continue;
-                    }
-
-                    ClientApiWorkspace.Vertex v = new ClientApiWorkspace.Vertex();
-                    v.setVertexId(workspaceEntity.getEntityVertexId());
-                    v.setVisible(workspaceEntity.isVisible());
-
-                    Integer graphPositionX = workspaceEntity.getGraphPositionX();
-                    Integer graphPositionY = workspaceEntity.getGraphPositionY();
-                    if (graphPositionX != null && graphPositionY != null) {
-                        GraphPosition graphPosition = new GraphPosition(graphPositionX, graphPositionY);
-                        v.setGraphPosition(graphPosition);
-                        v.setGraphLayoutJson(null);
-                    } else {
-                        v.setGraphPosition(null);
-
-                        String graphLayoutJson = workspaceEntity.getGraphLayoutJson();
-                        if (graphLayoutJson != null) {
-                            v.setGraphLayoutJson(graphLayoutJson);
-                        } else {
-                            v.setGraphLayoutJson("{}");
-                        }
-                    }
-
-                    workspaceClientApi.addVertex(v);
-                }
-            } else {
-                workspaceClientApi.removeVertices();
-            }
-
             return workspaceClientApi;
         } catch (JSONException e) {
             throw new RuntimeException(e);
@@ -304,40 +267,74 @@ public abstract class WorkspaceRepository {
         return graph;
     }
 
-    public abstract void updateEntitiesOnWorkspace(Workspace workspace, Collection<Update> updates, User user);
+    public abstract void updateEntitiesOnWorkspace(Workspace workspace, Collection<String> vertexIds, User user);
 
-    public void updateEntityOnWorkspace(Workspace workspace, Update update, User user) {
-        List<Update> updates = new ArrayList<>();
-        updates.add(update);
-        updateEntitiesOnWorkspace(workspace, updates, user);
+    public void updateEntityOnWorkspace(
+            Workspace workspace,
+            String vertexId,
+            User user
+    ) {
+        Collection<String> vertexIds = new ArrayList<>();
+        vertexIds.add(vertexId);
+        updateEntitiesOnWorkspace(workspace, vertexIds, user);
     }
 
-    public void updateEntityOnWorkspace(Workspace workspace, String vertexId, Boolean visible, GraphPosition graphPosition, User user) {
-        updateEntityOnWorkspace(workspace, new Update(vertexId, visible, graphPosition), user);
-    }
-
-    public void updateEntityOnWorkspace(String workspaceId, String vertexId, Boolean visible, GraphPosition graphPosition, User user) {
+    public void updateEntityOnWorkspace(
+            String workspaceId,
+            String vertexId,
+            User user
+    ) {
         Workspace workspace = findById(workspaceId, user);
-        updateEntityOnWorkspace(workspace, vertexId, visible, graphPosition, user);
+        updateEntityOnWorkspace(workspace, vertexId, user);
     }
 
-    public ClientApiWorkspacePublishResponse publish(ClientApiPublishItem[] publishData, String workspaceId, Authorizations authorizations) {
+    public ClientApiWorkspacePublishResponse publish(
+            ClientApiPublishItem[] publishData,
+            String workspaceId,
+            Authorizations authorizations
+    ) {
         if (this.entityHasImageIri == null) {
             this.entityHasImageIri = ontologyRepository.getRequiredRelationshipIRIByIntent("entityHasImage");
         }
 
         ClientApiWorkspacePublishResponse workspacePublishResponse = new ClientApiWorkspacePublishResponse();
-        publishVertices(publishData, Action.ADD_OR_UPDATE, workspacePublishResponse, workspaceId, authorizations);
-        publishEdges(publishData, Action.ADD_OR_UPDATE, workspacePublishResponse, workspaceId, authorizations);
+        publishVertices(
+                publishData,
+                ClientApiPublishItem.Action.ADD_OR_UPDATE,
+                workspacePublishResponse,
+                workspaceId,
+                authorizations
+        );
+        publishEdges(
+                publishData,
+                ClientApiPublishItem.Action.ADD_OR_UPDATE,
+                workspacePublishResponse,
+                workspaceId,
+                authorizations
+        );
         publishProperties(publishData, workspacePublishResponse, workspaceId, authorizations);
-        publishEdges(publishData, Action.DELETE, workspacePublishResponse, workspaceId, authorizations);
-        publishVertices(publishData, Action.DELETE, workspacePublishResponse, workspaceId, authorizations);
+        publishEdges(
+                publishData,
+                ClientApiPublishItem.Action.DELETE,
+                workspacePublishResponse,
+                workspaceId,
+                authorizations
+        );
+        publishVertices(
+                publishData,
+                ClientApiPublishItem.Action.DELETE,
+                workspacePublishResponse,
+                workspaceId,
+                authorizations
+        );
         return workspacePublishResponse;
     }
 
-    private void publishVertices(ClientApiPublishItem[] publishData, Action action,
-                                 ClientApiWorkspacePublishResponse workspacePublishResponse, String workspaceId,
-                                 Authorizations authorizations) {
+    private void publishVertices(
+            ClientApiPublishItem[] publishData, ClientApiPublishItem.Action action,
+            ClientApiWorkspacePublishResponse workspacePublishResponse, String workspaceId,
+            Authorizations authorizations
+    ) {
         LOGGER.debug("BEGIN publishVertices");
         for (ClientApiPublishItem data : publishData) {
             try {
@@ -349,7 +346,8 @@ public abstract class WorkspaceRepository {
                 checkNotNull(vertexId);
                 Vertex vertex = graph.getVertex(vertexId, FetchHint.ALL_INCLUDING_HIDDEN, authorizations);
                 checkNotNull(vertex);
-                if (SandboxStatusUtil.getSandboxStatus(vertex, workspaceId) == SandboxStatus.PUBLIC && !WorkspaceDiffHelper.isPublicDelete(vertex, authorizations)) {
+                if (SandboxStatusUtil.getSandboxStatus(vertex, workspaceId) == SandboxStatus.PUBLIC
+                        && !WorkspaceDiffHelper.isPublicDelete(vertex, authorizations)) {
                     String msg;
                     if (data.getAction() == ClientApiPublishItem.Action.DELETE) {
                         msg = "Cannot delete public vertex " + vertexId;
@@ -372,9 +370,11 @@ public abstract class WorkspaceRepository {
         graph.flush();
     }
 
-    private void publishEdges(ClientApiPublishItem[] publishData, Action action,
-                              ClientApiWorkspacePublishResponse workspacePublishResponse, String workspaceId,
-                              Authorizations authorizations) {
+    private void publishEdges(
+            ClientApiPublishItem[] publishData, ClientApiPublishItem.Action action,
+            ClientApiWorkspacePublishResponse workspacePublishResponse, String workspaceId,
+            Authorizations authorizations
+    ) {
         LOGGER.debug("BEGIN publishEdges");
         for (ClientApiPublishItem data : publishData) {
             try {
@@ -382,10 +382,15 @@ public abstract class WorkspaceRepository {
                     continue;
                 }
                 ClientApiRelationshipPublishItem relationshipPublishItem = (ClientApiRelationshipPublishItem) data;
-                Edge edge = graph.getEdge(relationshipPublishItem.getEdgeId(), FetchHint.ALL_INCLUDING_HIDDEN, authorizations);
+                Edge edge = graph.getEdge(
+                        relationshipPublishItem.getEdgeId(),
+                        FetchHint.ALL_INCLUDING_HIDDEN,
+                        authorizations
+                );
                 Vertex outVertex = edge.getVertex(Direction.OUT, authorizations);
                 Vertex inVertex = edge.getVertex(Direction.IN, authorizations);
-                if (SandboxStatusUtil.getSandboxStatus(edge, workspaceId) == SandboxStatus.PUBLIC && !WorkspaceDiffHelper.isPublicDelete(edge, authorizations)) {
+                if (SandboxStatusUtil.getSandboxStatus(edge, workspaceId) == SandboxStatus.PUBLIC
+                        && !WorkspaceDiffHelper.isPublicDelete(edge, authorizations)) {
                     String error_msg;
                     if (data.getAction() == ClientApiPublishItem.Action.DELETE) {
                         error_msg = "Cannot delete a public edge";
@@ -418,7 +423,12 @@ public abstract class WorkspaceRepository {
         graph.flush();
     }
 
-    private void publishProperties(ClientApiPublishItem[] publishData, ClientApiWorkspacePublishResponse workspacePublishResponse, String workspaceId, Authorizations authorizations) {
+    private void publishProperties(
+            ClientApiPublishItem[] publishData,
+            ClientApiWorkspacePublishResponse workspacePublishResponse,
+            String workspaceId,
+            Authorizations authorizations
+    ) {
         LOGGER.debug("BEGIN publishProperties");
         for (ClientApiPublishItem data : publishData) {
             try {
@@ -440,7 +450,12 @@ public abstract class WorkspaceRepository {
                 if (SandboxStatusUtil.getSandboxStatus(element, workspaceId) != SandboxStatus.PUBLIC) {
                     String errorMessage = "Cannot publish a modification of a property on a private element: " + element.getId();
                     VisibilityJson visibilityJson = VisalloProperties.VISIBILITY_JSON.getPropertyValue(element);
-                    LOGGER.warn("%s: visibilityJson: %s, workspaceId: %s", errorMessage, visibilityJson.toString(), workspaceId);
+                    LOGGER.warn(
+                            "%s: visibilityJson: %s, workspaceId: %s",
+                            errorMessage,
+                            visibilityJson == null ? null : visibilityJson.toString(),
+                            workspaceId
+                    );
                     data.setErrorMessage(errorMessage);
                     workspacePublishResponse.addFailure(data);
                     continue;
@@ -485,8 +500,14 @@ public abstract class WorkspaceRepository {
         return element;
     }
 
-    private void publishVertex(Vertex vertex, ClientApiPublishItem.Action action, Authorizations authorizations, String workspaceId) throws IOException {
-        if (action == ClientApiPublishItem.Action.DELETE || WorkspaceDiffHelper.isPublicDelete(vertex, authorizations)) {
+    private void publishVertex(
+            Vertex vertex,
+            ClientApiPublishItem.Action action,
+            Authorizations authorizations,
+            String workspaceId
+    ) throws IOException {
+        if (action == ClientApiPublishItem.Action.DELETE
+                || WorkspaceDiffHelper.isPublicDelete(vertex, authorizations)) {
             long beforeDeletionTimestamp = System.currentTimeMillis() - 1;
             graph.softDeleteVertex(vertex, authorizations);
             graph.flush();
@@ -495,14 +516,21 @@ public abstract class WorkspaceRepository {
         }
 
         // Need to elevate with videoFrame auth to be able to publish VideoFrame properties
-        Authorizations authWithVideoFrame = graph.createAuthorizations(authorizations, VideoFrameInfo.VISIBILITY_STRING);
+        Authorizations authWithVideoFrame = graph.createAuthorizations(
+                authorizations,
+                VideoFrameInfo.VISIBILITY_STRING
+        );
         vertex = graph.getVertex(vertex.getId(), authWithVideoFrame);
 
         LOGGER.debug("publishing vertex %s(%s)", vertex.getId(), vertex.getVisibility().toString());
         VisibilityJson visibilityJson = VisalloProperties.VISIBILITY_JSON.getPropertyValue(vertex);
 
         if (!visibilityJson.getWorkspaces().contains(workspaceId)) {
-            throw new VisalloException(String.format("vertex with id '%s' is not local to workspace '%s'", vertex.getId(), workspaceId));
+            throw new VisalloException(String.format(
+                    "vertex with id '%s' is not local to workspace '%s'",
+                    vertex.getId(),
+                    workspaceId
+            ));
         }
 
         visibilityJson = VisibilityJson.removeFromAllWorkspace(visibilityJson);
@@ -514,20 +542,27 @@ public abstract class WorkspaceRepository {
         for (Property property : vertex.getProperties()) {
             OntologyProperty ontologyProperty = ontologyRepository.getPropertyByIRI(property.getName());
             checkNotNull(ontologyProperty, "Could not find ontology property " + property.getName());
-            if (!ontologyProperty.getUserVisible() && !property.getName().equals(VisalloProperties.ENTITY_IMAGE_VERTEX_ID.getPropertyName())) {
+            boolean userVisible = ontologyProperty.getUserVisible();
+            if (shouldAutoPublishElementProperty(property, userVisible)) {
                 publishNewProperty(vertexElementMutation, property, workspaceId);
             }
         }
 
         Metadata metadata = new Metadata();
-        VisalloProperties.VISIBILITY_JSON_METADATA.setMetadata(metadata, visibilityJson, visibilityTranslator.getDefaultVisibility());
+        VisalloProperties.VISIBILITY_JSON_METADATA.setMetadata(
+                metadata,
+                visibilityJson,
+                visibilityTranslator.getDefaultVisibility()
+        );
 
-        // we need to alter the visibility of the json property, otherwise we'll have two json properties, one with the old visibility and one with the new.
-        VisalloProperties.VISIBILITY_JSON.alterVisibility(vertexElementMutation, visalloVisibility.getVisibility());
-        VisalloProperties.VISIBILITY_JSON.setProperty(vertexElementMutation, visibilityJson, metadata, visalloVisibility.getVisibility());
-        vertexElementMutation.save(authorizations);
+        VisalloProperties.VISIBILITY_JSON.setProperty(
+                vertexElementMutation,
+                visibilityJson,
+                visibilityTranslator.getDefaultVisibility()
+        );
+        vertexElementMutation.save(authWithVideoFrame);
 
-        for (Vertex termMention : termMentionRepository.findByVertexIdForVertex(vertex.getId(), authorizations)) {
+        for (Vertex termMention : termMentionRepository.findByVertexId(vertex.getId(), authorizations)) {
             termMentionRepository.updateVisibility(termMention, visalloVisibility.getVisibility(), authorizations);
         }
 
@@ -535,7 +570,14 @@ public abstract class WorkspaceRepository {
         workQueueRepository.broadcastPublishVertex(vertex);
     }
 
-    private void publishProperty(Element element, ClientApiPublishItem.Action action, String key, String name, String workspaceId, Authorizations authorizations) {
+    private void publishProperty(
+            Element element,
+            ClientApiPublishItem.Action action,
+            String key,
+            String name,
+            String workspaceId,
+            Authorizations authorizations
+    ) {
         long beforeActionTimestamp = System.currentTimeMillis() - 1;
         if (action == ClientApiPublishItem.Action.DELETE) {
             element.softDeleteProperty(key, name, authorizations);
@@ -566,12 +608,24 @@ public abstract class WorkspaceRepository {
                 if (publicProperty == null) {
                     element.softDeleteProperty(key, name, new Visibility(workspaceId), authorizations);
                     graph.flush();
-                    workQueueRepository.pushPublishedPropertyDeletion(element, key, name, beforeActionTimestamp, Priority.HIGH);
+                    workQueueRepository.pushPublishedPropertyDeletion(
+                            element,
+                            key,
+                            name,
+                            beforeActionTimestamp,
+                            Priority.HIGH
+                    );
                     foundProperty = true;
                 }
             } else if (sandboxStatus == SandboxStatus.PUBLIC_CHANGED) {
                 element.softDeleteProperty(key, name, propertyVisibility, authorizations);
-                workQueueRepository.pushPublishedPropertyDeletion(element, key, name, beforeActionTimestamp, Priority.HIGH);
+                workQueueRepository.pushPublishedPropertyDeletion(
+                        element,
+                        key,
+                        name,
+                        beforeActionTimestamp,
+                        Priority.HIGH
+                );
                 if (publicProperty != null) {
                     element.markPropertyVisible(publicProperty, new Visibility(workspaceId), authorizations);
 
@@ -580,7 +634,11 @@ public abstract class WorkspaceRepository {
                     Metadata metadata = property.getMetadata();
                     VisibilityJson visibilityJson = VisalloProperties.VISIBILITY_JSON_METADATA.getMetadataValue(metadata);
                     VisibilityJson.removeFromWorkspace(visibilityJson, workspaceId);
-                    VisalloProperties.VISIBILITY_JSON_METADATA.setMetadata(metadata, visibilityJson, visibilityTranslator.getDefaultVisibility());
+                    VisalloProperties.VISIBILITY_JSON_METADATA.setMetadata(
+                            metadata,
+                            visibilityJson,
+                            visibilityTranslator.getDefaultVisibility()
+                    );
                     Visibility newVisibility = visibilityTranslator.toVisibility(visibilityJson).getVisibility();
 
                     if (!publicVisibility.equals(newVisibility)) {
@@ -589,7 +647,14 @@ public abstract class WorkspaceRepository {
                         newVisibility = publicVisibility;
                     }
                     element.addPropertyValue(key, name, property.getValue(), metadata, newVisibility, authorizations);
-                    workQueueRepository.pushGraphPropertyQueue(element, key, name, ElementOrPropertyStatus.UNHIDDEN, beforeActionTimestamp, Priority.HIGH);
+                    workQueueRepository.pushGraphPropertyQueue(
+                            element,
+                            key,
+                            name,
+                            ElementOrPropertyStatus.UNHIDDEN,
+                            beforeActionTimestamp,
+                            Priority.HIGH
+                    );
                 }
                 graph.flush();
                 workQueueRepository.broadcastPublishProperty(element, key, name);
@@ -604,9 +669,21 @@ public abstract class WorkspaceRepository {
             if (foundProperty) {
                 Iterable<Vertex> termMentions;
                 if (element instanceof Vertex) {
-                    termMentions = termMentionRepository.findByVertexIdAndProperty(element.getId(), property.getKey(), property.getName(), propertyVisibility, authorizations);
+                    termMentions = termMentionRepository.findByVertexIdAndProperty(
+                            element.getId(),
+                            property.getKey(),
+                            property.getName(),
+                            propertyVisibility,
+                            authorizations
+                    );
                 } else {
-                    termMentions = termMentionRepository.findByEdgeIdAndProperty((Edge) element, property.getKey(), property.getName(), propertyVisibility, authorizations);
+                    termMentions = termMentionRepository.findByEdgeIdAndProperty(
+                            (Edge) element,
+                            property.getKey(),
+                            property.getName(),
+                            propertyVisibility,
+                            authorizations
+                    );
                 }
                 for (Vertex termMention : termMentions) {
                     termMentionRepository.updateVisibility(termMention, property.getVisibility(), authorizations);
@@ -614,28 +691,46 @@ public abstract class WorkspaceRepository {
             }
         }
         if (!foundProperty) {
-            throw new VisalloException(String.format("no property with key '%s' and name '%s' found on workspace '%s'", key, name, workspaceId));
+            throw new VisalloException(String.format(
+                    "no property with key '%s' and name '%s' found on workspace '%s'",
+                    key,
+                    name,
+                    workspaceId
+            ));
         }
     }
 
     private boolean publishNewProperty(ExistingElementMutation elementMutation, Property property, String workspaceId) {
         VisibilityJson visibilityJson = VisalloProperties.VISIBILITY_JSON_METADATA.getMetadataValue(property.getMetadata());
         if (visibilityJson == null) {
-            LOGGER.debug("skipping property %s. no visibility json property", property.toString());
+            LOGGER.warn("skipping property %s. no visibility json property", property.toString());
             return false;
         }
         if (!visibilityJson.getWorkspaces().contains(workspaceId)) {
-            LOGGER.debug("skipping property %s. doesn't have workspace in json or is not hidden from this workspace.", property.toString());
+            LOGGER.warn(
+                    "skipping property %s. doesn't have workspace in json or is not hidden from this workspace.",
+                    property.toString()
+            );
             return false;
         }
 
-        LOGGER.debug("publishing property %s:%s(%s)", property.getKey(), property.getName(), property.getVisibility().toString());
+        LOGGER.debug(
+                "publishing property %s:%s(%s)",
+                property.getKey(),
+                property.getName(),
+                property.getVisibility().toString()
+        );
         visibilityJson = VisibilityJson.removeFromAllWorkspace(visibilityJson);
         VisalloVisibility visalloVisibility = visibilityTranslator.toVisibility(visibilityJson);
 
         elementMutation
                 .alterPropertyVisibility(property, visalloVisibility.getVisibility())
-                .setPropertyMetadata(property, VisalloProperties.VISIBILITY_JSON.getPropertyName(), visibilityJson.toString(), visibilityTranslator.getDefaultVisibility());
+                .setPropertyMetadata(
+                        property,
+                        VisalloProperties.VISIBILITY_JSON.getPropertyName(),
+                        visibilityJson.toString(),
+                        visibilityTranslator.getDefaultVisibility()
+                );
 
         return true;
     }
@@ -659,14 +754,22 @@ public abstract class WorkspaceRepository {
         LOGGER.debug("publishing edge %s(%s)", edge.getId(), edge.getVisibility().toString());
         VisibilityJson visibilityJson = VisalloProperties.VISIBILITY_JSON.getPropertyValue(edge);
         if (!visibilityJson.getWorkspaces().contains(workspaceId)) {
-            throw new VisalloException(String.format("edge with id '%s' is not local to workspace '%s'", edge.getId(), workspaceId));
+            throw new VisalloException(String.format(
+                    "edge with id '%s' is not local to workspace '%s'",
+                    edge.getId(),
+                    workspaceId
+            ));
         }
 
         if (edge.getLabel().equals(entityHasImageIri)) {
-            publishGlyphIconProperty(edge, workspaceId, authorizations);
+            publishGlyphIconProperties(edge, workspaceId, authorizations);
         }
 
-        edge.softDeleteProperty(ElementMutation.DEFAULT_KEY, VisalloProperties.VISIBILITY_JSON.getPropertyName(), authorizations);
+        edge.softDeleteProperty(
+                ElementMutation.DEFAULT_KEY,
+                VisalloProperties.VISIBILITY_JSON.getPropertyName(),
+                authorizations
+        );
         visibilityJson = VisibilityJson.removeFromAllWorkspace(visibilityJson);
         VisalloVisibility visalloVisibility = visibilityTranslator.toVisibility(visibilityJson);
         ExistingElementMutation<Edge> edgeExistingElementMutation = edge.prepareMutation();
@@ -678,17 +781,28 @@ public abstract class WorkspaceRepository {
                 userVisible = false;
             } else {
                 OntologyProperty ontologyProperty = ontologyRepository.getPropertyByIRI(property.getName());
-                checkNotNull(ontologyProperty, "Could not find ontology property " + property.getName() + " on property " + property);
+                checkNotNull(
+                        ontologyProperty,
+                        "Could not find ontology property " + property.getName() + " on property " + property
+                );
                 userVisible = ontologyProperty.getUserVisible();
             }
-            if (!userVisible && !property.getName().equals(VisalloProperties.ENTITY_IMAGE_VERTEX_ID.getPropertyName())) {
+            if (shouldAutoPublishElementProperty(property, userVisible)) {
                 publishNewProperty(edgeExistingElementMutation, property, workspaceId);
             }
         }
 
         Metadata metadata = new Metadata();
-        VisalloProperties.VISIBILITY_JSON_METADATA.setMetadata(metadata, visibilityJson, visibilityTranslator.getDefaultVisibility());
-        VisalloProperties.VISIBILITY_JSON.setProperty(edgeExistingElementMutation, visibilityJson, metadata, visalloVisibility.getVisibility());
+        VisalloProperties.VISIBILITY_JSON_METADATA.setMetadata(
+                metadata,
+                visibilityJson,
+                visibilityTranslator.getDefaultVisibility()
+        );
+        VisalloProperties.VISIBILITY_JSON.setProperty(
+                edgeExistingElementMutation,
+                visibilityJson,
+                visibilityTranslator.getDefaultVisibility()
+        );
         edge = edgeExistingElementMutation.save(authorizations);
 
         for (Vertex termMention : termMentionRepository.findResolvedTo(inVertex.getId(), authorizations)) {
@@ -703,7 +817,38 @@ public abstract class WorkspaceRepository {
         workQueueRepository.broadcastPublishEdge(edge);
     }
 
-    private void publishGlyphIconProperty(Edge hasImageEdge, String workspaceId, Authorizations authorizations) {
+    private boolean shouldAutoPublishElementProperty(Property property, boolean userVisible) {
+        if (userVisible) {
+            return false;
+        }
+
+        String propertyName = property.getName();
+        if (propertyName.equals(VisalloProperties.ENTITY_IMAGE_VERTEX_ID.getPropertyName())) {
+            return false;
+        }
+
+        if (propertyName.equals(VisalloProperties.CONCEPT_TYPE.getPropertyName())
+                || propertyName.equals(VisalloProperties.MODIFIED_BY.getPropertyName())
+                || propertyName.equals(VisalloProperties.MODIFIED_DATE.getPropertyName())
+                || propertyName.equals(VisalloProperties.VISIBILITY_JSON.getPropertyName())) {
+            VisibilityJson visibilityJson = VisalloProperties.VISIBILITY_JSON_METADATA.getMetadataValue(property.getMetadata());
+            if (visibilityJson != null) {
+                LOGGER.warn("Property %s should not have visibility JSON metadata set", property.toString());
+                return true;
+            }
+
+            if (!property.getVisibility().equals(visibilityTranslator.getDefaultVisibility())) {
+                LOGGER.warn("Property %s should have default visibility", property.toString());
+                return true;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private void publishGlyphIconProperties(Edge hasImageEdge, String workspaceId, Authorizations authorizations) {
         Vertex entityVertex = hasImageEdge.getVertex(Direction.OUT, authorizations);
         checkNotNull(entityVertex, "Could not find has image source vertex " + hasImageEdge.getVertexId(Direction.OUT));
         ExistingElementMutation elementMutation = entityVertex.prepareMutation();
@@ -727,6 +872,31 @@ public abstract class WorkspaceRepository {
         });
     }
 
+    @Traced
+    protected Iterable<Edge> findModifiedEdges(
+            final Workspace workspace,
+            List<WorkspaceEntity> workspaceEntities,
+            boolean includeHidden,
+            User user
+    ) {
+        Authorizations authorizations = getAuthorizationRepository().getGraphAuthorizations(
+                user,
+                VISIBILITY_STRING,
+                workspace.getWorkspaceId()
+        );
+
+        Iterable<Vertex> vertices = stream(WorkspaceEntity.toVertices(workspaceEntities, getGraph(), authorizations))
+                .filter(vertex -> vertex != null)
+                .collect(Collectors.toList());
+        Iterable<String> edgeIds = getGraph().findRelatedEdgeIdsForVertices(vertices, authorizations);
+
+        return getGraph().getEdges(
+                edgeIds,
+                includeHidden ? FetchHint.ALL_INCLUDING_HIDDEN : FetchHint.ALL,
+                authorizations
+        );
+    }
+
     public abstract Dashboard findDashboardById(String workspaceId, String dashboardId, User user);
 
     public abstract void deleteDashboard(String workspaceId, String dashboardId, User user);
@@ -737,45 +907,103 @@ public abstract class WorkspaceRepository {
 
     public abstract void deleteDashboardItem(String workspaceId, String dashboardItemId, User user);
 
-    public abstract String addOrUpdateDashboardItem(String workspaceId, String dashboardId, String dashboardItemId, String title, String configuration, String extensionId, User user);
+    public abstract Collection<Product> findAllProductsForWorkspace(String workspaceId, User user);
+
+    public abstract Product addOrUpdateProduct(String workspaceId, String productId, String title, String kind, JSONObject params, User user);
+
+    public abstract Product updateProductPreview(String workspaceId, String productId, String previewDataUrl, User user);
+
+    public abstract void deleteProduct(String workspaceId, String productId, User user);
+
+    public abstract Product findProductById(String workspaceId, String productId, JSONObject params, boolean includeExtended, User user);
+
+    public abstract InputStream getProductPreviewById(String workspaceId, String productId, User user);
+
+    protected VisibilityTranslator getVisibilityTranslator() {
+        return visibilityTranslator;
+    }
+
+    protected TermMentionRepository getTermMentionRepository() {
+        return termMentionRepository;
+    }
+
+    protected OntologyRepository getOntologyRepository() {
+        return ontologyRepository;
+    }
+
+    protected WorkQueueRepository getWorkQueueRepository() {
+        return workQueueRepository;
+    }
+
+    public abstract String addOrUpdateDashboardItem(
+            String workspaceId,
+            String dashboardId,
+            String dashboardItemId,
+            String title,
+            String configuration,
+            String extensionId,
+            User user
+    );
 
     public abstract String addOrUpdateDashboard(String workspaceId, String dashboardId, String title, User user);
 
-    public static class Update {
-        private final String vertexId;
-        private final Boolean visible;
-        private final GraphPosition graphPosition;
-        private final String graphLayoutJson;
+    protected AuthorizationRepository getAuthorizationRepository() {
+        return authorizationRepository;
+    }
 
-        public Update(String vertexId, Boolean visible, GraphPosition graphPosition) {
-            this.vertexId = vertexId;
-            this.visible = visible;
-            this.graphPosition = graphPosition;
-            graphLayoutJson = null;
+    protected void fireWorkspaceBeforeDelete(Workspace workspace, User user) {
+        for (WorkspaceListener workspaceListener : getWorkspaceListeners()) {
+            workspaceListener.workspaceBeforeDelete(workspace, user);
         }
+    }
 
-        public Update(String vertexId, Boolean visible, GraphPosition graphPosition, String graphLayoutJson) {
-            this.vertexId = vertexId;
-            this.visible = visible;
-            this.graphPosition = graphPosition;
-            this.graphLayoutJson = graphLayoutJson;
+    protected void fireWorkspaceProductUpdated(Product product, JSONObject params, User user) {
+        for (WorkspaceListener workspaceListener : getWorkspaceListeners()) {
+            workspaceListener.workspaceProductUpdated(product, params, user);
         }
+    }
 
-        public String getVertexId() {
-            return vertexId;
+    protected void fireWorkspaceAddProduct(Product product, User user) {
+        for (WorkspaceListener workspaceListener : getWorkspaceListeners()) {
+            workspaceListener.workspaceAddProduct(product, user);
         }
+    }
 
-        public Boolean getVisible() {
-            return visible;
+    protected void fireWorkspaceUpdateEntities(Workspace workspace, Collection<String> vertexIds, User user) {
+        for (WorkspaceListener workspaceListener : getWorkspaceListeners()) {
+            workspaceListener.workspaceUpdateEntities(workspace, vertexIds, user);
         }
+    }
 
-        public GraphPosition getGraphPosition() {
-            return graphPosition;
+    protected void fireWorkspaceUpdateUser(Workspace workspace, String userId, WorkspaceAccess workspaceAccess, User user) {
+        for (WorkspaceListener workspaceListener : getWorkspaceListeners()) {
+            workspaceListener.workspaceUpdateUser(workspace, userId, workspaceAccess, user);
         }
+    }
 
-        public String getGraphLayoutJson() {
-            return graphLayoutJson;
+    protected void fireWorkspaceAdded(Workspace workspace, User user) {
+        for (WorkspaceListener workspaceListener : getWorkspaceListeners()) {
+            workspaceListener.workspaceAdded(workspace, user);
         }
+    }
+
+    protected void fireWorkspaceBeforeDeleteProduct(String workspaceId, String productId, User user) {
+        for (WorkspaceListener workspaceListener : getWorkspaceListeners()) {
+            workspaceListener.workspaceBeforeDeleteProduct(workspaceId, productId, user);
+        }
+    }
+
+    protected void fireWorkspaceDeleteUser(Workspace workspace, String userId, User user) {
+        for (WorkspaceListener workspaceListener : getWorkspaceListeners()) {
+            workspaceListener.workspaceDeleteUser(workspace, userId, user);
+        }
+    }
+
+    protected Collection<WorkspaceListener> getWorkspaceListeners() {
+        if (workspaceListeners == null) {
+            workspaceListeners = InjectHelper.getInjectedServices(WorkspaceListener.class, configuration);
+        }
+        return workspaceListeners;
     }
 }
 

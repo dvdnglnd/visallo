@@ -4,13 +4,15 @@ define([
     './urlFormatters',
     './formula',
     'util/messages',
-    'util/requirejs/promise!../service/ontologyPromise'
+    'util/requirejs/promise!../service/ontologyPromise',
+    'util/visibility/util'
 ], function(
     F,
     vertexUrl,
     formula,
     i18n,
-    ontology) {
+    ontology,
+    visibilityUtil) {
     'use strict';
 
     var propertiesByTitle = ontology.properties.byTitle,
@@ -37,10 +39,15 @@ define([
                         undefined;
             },
 
-            getVertexIdsFromDataEventOrCurrentSelection: function(data) {
+            getVertexIdsFromDataEventOrCurrentSelection: function(data, opts) {
                 // Normalize the vertexIds sent from a vertex menu event,
                 // also checking the current object selection
-                var vertexIds = [];
+                var vertexIds = [],
+                    options = opts || {},
+                    // Return a promise (will return more accurate list that
+                    // isn't suseptible to selectObjects -> objectsSelected
+                    // race condition
+                    async = options.async
 
                 if (data && data.vertexId) {
                     vertexIds = [data.vertexId];
@@ -48,19 +55,29 @@ define([
                     vertexIds = data.vertexIds;
                 }
 
-                if ((typeof window.visalloData !== 'undefined') &&
-                   visalloData.selectedObjects &&
-                   visalloData.selectedObjects.vertices.length > 0) {
-
-                    var selectedVertexIds = _.pluck(visalloData.selectedObjects.vertices, 'id');
-                    if (_.intersection(vertexIds, selectedVertexIds).length) {
-                        vertexIds = vertexIds.concat(selectedVertexIds);
-                    } else if (!vertexIds.length) {
-                        vertexIds = selectedVertexIds;
+                if (typeof window.visalloData !== 'undefined') {
+                    if (async) {
+                        return visalloData.selectedObjectsPromise()
+                            .then(vertexIdsUsingSelectedObjects);
+                    } else {
+                        console.warn('Use { async: true } when calling getVertexIdsFromDataEventOrCurrentSelection')
+                        return vertexIdsUsingSelectedObjects(visalloData.selectedObjects)
                     }
                 }
 
-                return _.unique(vertexIds);
+                return vertexIdsUsingSelectedObjects();
+
+                function vertexIdsUsingSelectedObjects(selectedObjects) {
+                    if (selectedObjects && selectedObjects.vertices.length > 0) {
+                        var selectedVertexIds = _.pluck(selectedObjects.vertices, 'id');
+                        if (_.intersection(vertexIds, selectedVertexIds).length) {
+                            vertexIds = vertexIds.concat(selectedVertexIds);
+                        } else if (!vertexIds.length) {
+                            vertexIds = selectedVertexIds;
+                        }
+                    }
+                    return _.unique(vertexIds);
+                }
             },
 
             metadata: {
@@ -73,14 +90,17 @@ define([
 
                 datetime: function(el, value) {
                     el.textContent = F.date.dateTimeString(value);
+                    return el;
                 },
 
                 sandboxStatus: function(el, value) {
                     el.textContent = V.sandboxStatus({ sandboxStatus: value }) || '';
+                    return el;
                 },
 
                 percent: function(el, value) {
                     el.textContent = F.number.percent(value);
+                    return el;
                 },
 
                 userAsync: function(el, userId) {
@@ -90,6 +110,7 @@ define([
                         })
                         .then(function(users) {
                             el.textContent = users && users[0] || i18n('user.unknown.displayName');
+                            return el;
                         })
                 }
             },
@@ -102,49 +123,52 @@ define([
                 //
                 // for example: geoLocation: function(...) { el.textContent = 'coords'; }
 
-                visibility: function(el, property) {
-                    $('<i>').text((
-                        property.value &&
-                        property.value.source
-                    ) || i18n('visibility.blank')).appendTo(el);
+                visibility: function(el, property, element) {
+                    visibilityUtil.attachComponent('viewer', el, {
+                        property: property,
+                        value: property.value && property.value.source,
+                        element: element
+                    })
+
+                    return el;
+                },
+
+                'directory/entity': function(el, property) {
+                    return F.directoryEntity.requestPretty(property.value)
+                      .then(function(value) {
+                          $(el).text(value);
+                          return el;
+                      });
                 },
 
                 geoLocation: function(el, property) {
-                    if ($('#app.fullscreen-details').length) {
-                        $(el).append(
-                            F.geoLocation.pretty(property.value)
-                        );
-                        return;
-                    }
-
-                    var anchor = $('<a>')
-                        .addClass('map-coordinates')
-                        .data({
-                            latitude: property.value.latitude,
-                            longitude: property.value.longitude
-                        }),
+                    var wrap = $('<span>'),
                         displayValue = F.geoLocation.pretty(property.value, true);
 
                     if (property.value.description) {
-                        anchor.append(property.value.description + ' ');
+                        wrap.append(property.value.description + ' ');
                     }
 
                     $('<small>')
                         .css('white-space', 'nowrap')
                         .text(F.geoLocation.pretty(property.value, true))
-                        .appendTo(anchor);
+                        .appendTo(wrap);
 
-                    anchor.appendTo(el);
+                    wrap.appendTo(el);
+
+                    return el;
                 },
 
                 bytes: function(el, property) {
                     el.textContent = F.bytes.pretty(property.value);
+                    return el;
                 },
 
                 link: function(el, property, vertex) {
                     var anchor = document.createElement('a'),
-                        value = V.prop(vertex, property.name),
-                        href = $.trim(value);
+                        value = V.prop(vertex, property.name, property.key),
+                        href = $.trim(value),
+                        linkTitle = property.metadata['http://visallo.org#linkTitle'];
 
                     if (!(/^http/).test(href)) {
                         href = 'http://' + href;
@@ -152,13 +176,16 @@ define([
 
                     anchor.setAttribute('href', href);
                     anchor.setAttribute('target', '_blank');
-                    anchor.textContent = href;
+                    anchor.textContent = linkTitle || href;
 
                     el.appendChild(anchor);
+
+                    return el;
                 },
 
                 textarea: function(el, property) {
                     $(el).html(_.escape(property.value || '').replace(/\r?\n+/g, '<br>'));
+                    return el;
                 },
 
                 heading: function(el, property) {
@@ -172,31 +199,34 @@ define([
                     div.style.marginRight = '0.25em';
                     div = el.insertBefore(div, el.childNodes[0]);
 
-                    require(['d3'], function(d3) {
-                        d3.select(div)
-                            .append('svg')
-                                .style('vertical-align', 'middle')
-                                .attr('width', dim)
-                                .attr('height', dim)
-                                .append('g')
-                                    .attr('transform', 'rotate(' + property.value + ' ' + half + ' ' + half + ')')
-                                    .call(function() {
-                                        this.append('line')
-                                            .attr('x1', half)
-                                            .attr('y1', 0)
-                                            .attr('x2', half)
-                                            .attr('y2', dim)
-                                            .call(styling)
+                    return Promise.require('d3')
+                        .then(function(d3) {
+                            d3.select(div)
+                                .append('svg')
+                                    .style('vertical-align', 'middle')
+                                    .attr('width', dim)
+                                    .attr('height', dim)
+                                    .append('g')
+                                        .attr('transform', 'rotate(' + property.value + ' ' + half + ' ' + half + ')')
+                                        .call(function() {
+                                            this.append('line')
+                                                .attr('x1', half)
+                                                .attr('y1', 0)
+                                                .attr('x2', half)
+                                                .attr('y2', dim)
+                                                .call(styling)
 
-                                        this.append('g')
-                                            .attr('transform', 'rotate(30 ' + half + ' 0)')
-                                            .call(createArrowLine)
+                                            this.append('g')
+                                                .attr('transform', 'rotate(30 ' + half + ' 0)')
+                                                .call(createArrowLine)
 
-                                        this.append('g')
-                                            .attr('transform', 'rotate(-30 ' + half + ' 0)')
-                                            .call(createArrowLine)
-                                    });
-                    });
+                                            this.append('g')
+                                                .attr('transform', 'rotate(-30 ' + half + ' 0)')
+                                                .call(createArrowLine)
+                                        });
+
+                            return el;
+                        });
 
                     function createArrowLine() {
                         this.append('line')
@@ -456,11 +486,6 @@ define([
                 }
             },
 
-            propFromAudit: function(vertex, propertyAudit) {
-                //propertyName, newValue, previousValue
-                return V.propDisplay(propertyAudit.propertyName, propertyAudit.newValue || propertyAudit.previousValue);
-            },
-
             rollup: function(name, values) {
                 name = V.propName(name);
                 var ontologyProperty = propertiesByTitle[name],
@@ -714,8 +739,8 @@ define([
                 return Boolean(result);
             },
 
-            title: function(vertex) {
-                var title = formulaResultForElement(vertex, 'titleFormula')
+            title: function(vertex, accessedPropertyNames) {
+                var title = formulaResultForElement(vertex, 'titleFormula', undefined, accessedPropertyNames)
 
                 if (!title) {
                     title = V.prop(vertex, 'title', undefined, {
@@ -810,6 +835,7 @@ define([
                     vertex.properties['http://visallo.org#conceptType'] === 'relationship';
                 return propsIsObjectNotArray ||
                     V.prop(vertex, 'conceptType') === 'relationship' ||
+                    vertex.type === 'edge' ||
                     (_.has(vertex, 'outVertexId') && _.has(vertex, 'inVertexId'));
             },
 
@@ -863,7 +889,7 @@ define([
         }
     }
 
-    function formulaResultForElement(vertexOrEdge, formulaKey, defaultValue) {
+    function formulaResultForElement(vertexOrEdge, formulaKey, defaultValue, accessedPropertyNames) {
         var isEdge = V.isEdge(vertexOrEdge),
             result = defaultValue,
             formulaString,
@@ -882,7 +908,20 @@ define([
         }
 
         if (formulaString) {
-            result = formula(formulaString, vertexOrEdge, V, undefined, { additionalScope: additionalScope });
+            var capture = function(fn, vertex, name) {
+                    var result = fn.apply(this, _.rest(arguments))
+                    if (_.isArray(accessedPropertyNames) &&
+                        (!_.isUndefined(result) || (_.isString(result) && result))) {
+                        accessedPropertyNames.push(name);
+                    }
+                    return result;
+                };
+            result = formula(formulaString, vertexOrEdge, {
+                prop: _.wrap(V.prop, capture),
+                propRaw: _.wrap(V.propRaw, capture),
+                longestProp: _.wrap(V.longestProp, capture),
+                isEdge: V.isEdge
+            }, undefined, { additionalScope: additionalScope });
         }
 
         return result;

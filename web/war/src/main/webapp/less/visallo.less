@@ -18,7 +18,6 @@
 @import "util/users/userSelect";
 @import "util/ontology/ontology";
 @import "util/instructions";
-@import "util/jquery-ui-draggable-multiselect";
 @import "util/context-menu";
 @import "util/selection";
 @import "util/offlineOverlay";
@@ -26,7 +25,7 @@
 @import "util/nav-lists";
 
 // Import bootstrap
-@import "../libs/bootstrap/less/bootstrap.less";
+@import "../libs/@visallo/bootstrap/less/bootstrap.less";
 #grid {
     .core  {
         .span(@gridColumns) {
@@ -35,25 +34,26 @@
     }
 };
 // Override sprite paths
-@iconSpritePath: "../libs/bootstrap/img/glyphicons-halflings.png";
-@iconWhiteSpritePath: "../libs/bootstrap/img/glyphicons-halflings-white.png";
+@iconSpritePath: "../libs/@visallo/bootstrap/img/glyphicons-halflings.png";
+@iconWhiteSpritePath: "../libs/@visallo/bootstrap/img/glyphicons-halflings-white.png";
 @import "../libs/bootstrap-datepicker/less/datepicker.less";
 @import "../libs/bootstrap-timepicker/less/timepicker.less";
 
-@import "../libs/video.js/dist/video-js/video-js.min.css";
-@import (less) "../libs/jquery-ui/themes/ui-lightness/jquery-ui.css";
-@import (less) "../libs/jquery-ui/themes/ui-lightness/theme.css";
-@import (less) "../libs/openlayers/theme/default/style.css";
+@import "../libs/video.js/dist/video-js.min.css";
+@import (less) "../libs/jquery-ui-bundle/jquery-ui.css";
+@import (less) "../libs/jquery-ui-bundle/jquery-ui.theme.css";
+@import (less) "../libs/openlayers/dist/ol.css";
 @import "../libs/gridstack/dist/gridstack.min.css";
 
 @import "dashboard/dashboard";
-@import "sync/sync";
 @import "fields/fields";
 @import "login/login";
 @import "notifications/notifications";
 @import "workspaces/userAccount";
 @import "workspaces/timeline";
 @import "search/sort";
+@import "search/restrictValuesMulti";
+@import "detail/layouts";
 
 html.fullscreenApp {
   height: 100%;
@@ -111,6 +111,7 @@ html.fullscreenDetails {
   .activity-pane,
   .search-pane,
   .workspaces-pane,
+  .products-pane,
   .admin-pane,
   .plugin-pane,
   .detail-pane {
@@ -133,6 +134,7 @@ html.fullscreenDetails {
 
   .search-pane,
   .workspaces-pane,
+  .products-pane,
   .admin-pane,
   .plugin-pane,
   .detail-pane {
@@ -151,7 +153,7 @@ html.fullscreenDetails {
   }
 }
 
-.graph-pane, .map-pane, .dashboard-pane, .fullscreen-pane {
+.dashboard-pane, .fullscreen-pane {
   display: none;
 
   &.visible {
@@ -193,6 +195,15 @@ html.fullscreenDetails {
   .left-pane;
 }
 
+.products-pane {
+  .left-pane;
+
+  @import "products/products";
+}
+.products-full-pane {
+  @import "products/full";
+}
+
 .workspaces-pane {
   .left-pane;
 
@@ -218,23 +229,9 @@ html.fullscreenDetails {
   @import "activity/activity";
 }
 
-.graph-pane {
-  .fullscreen;
-  left: @menubar-width;
-
-  @import "graph/graph";
-}
-
 .fullscreen-pane {
   .fullscreen;
   left: @menubar-width;
-}
-
-.map-pane {
-  .fullscreen;
-  left: @menubar-width;
-
-  @import "map/map";
 }
 
 .dashboard-pane {
@@ -267,6 +264,9 @@ html.fullscreenDetails {
   visibility: visible;
   right: 0;
 }
+
+@import "comments/comments";
+@import "products/full";
 
 .detail-pane {
   @import "detail/detail";
@@ -347,6 +347,27 @@ textarea, input[type="text"], input[type="password"], input[type="datetime"], in
     bottom: 0;
 }
 
+@keyframes draggable-fade-in {
+  to { opacity: 1; }
+}
+.accepts-draggable {
+  &:before {
+    background: fade(white, 75%) url(../img/drop-items@2x.png) center/auto 30% no-repeat;
+    content: '';
+    display: block;
+    left: 0; right: 0; bottom: 0; top: 0;
+    pointer-events: none;
+    position: absolute;
+    z-index: 1;
+    opacity: 0;
+    animation-name: draggable-fade-in;
+    animation-duration: 0.5s;
+    animation-fill-mode: forwards;
+    animation-iteration-count: 1;
+    animation-play-state: running;
+  }
+}
+
 .alert {
   word-break: break-word;
   .disable-text-selection;
@@ -406,4 +427,10 @@ textarea, input[type="text"], input[type="password"], input[type="datetime"], in
 }
 .btn-link:focus {
   outline: none;
+}
+
+// fix for IE displaying it's own "x" in text areas to clear text
+::-ms-clear {
+  width : 0;
+  height: 0;
 }

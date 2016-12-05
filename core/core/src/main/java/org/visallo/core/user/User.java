@@ -1,19 +1,15 @@
 package org.visallo.core.user;
 
-import org.visallo.web.clientapi.model.Privilege;
+import org.json.JSONObject;
 import org.visallo.web.clientapi.model.UserStatus;
 import org.visallo.web.clientapi.model.UserType;
-import org.json.JSONObject;
-import com.v5analytics.simpleorm.SimpleOrmContext;
 
 import java.io.Serializable;
 import java.util.Date;
-import java.util.Set;
+import java.util.Map;
 
 public interface User extends Serializable {
     long serialVersionUID = 2L;
-
-    SimpleOrmContext getSimpleOrmContext();
 
     String getUserId();
 
@@ -43,9 +39,11 @@ public interface User extends Serializable {
 
     JSONObject getUiPreferences();
 
-    Set<Privilege> getPrivileges();
-
     String getPasswordResetToken();
 
     Date getPasswordResetTokenExpirationDate();
+
+    Object getProperty(String propertyName);
+
+    Map<String, Object> getCustomProperties();
 }

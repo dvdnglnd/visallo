@@ -35,6 +35,7 @@ define([
         });
 
         this.after('initialize', function() {
+            var self = this;
             this.on('change', {
                 searchSelector: this.onChangeSearch,
                 limitSelector: this.onChangeLimit
@@ -47,7 +48,11 @@ define([
             this.sortFields = this.getSortFields();
             this.limit = this.getLimit();
 
-            this.render().done(this.updateAggregationVisibility.bind(this, true));
+            this.render()
+                .then(this.updateAggregationVisibility.bind(this, true))
+                .then(function() {
+                    self.trigger('positionDialog');
+                })
         });
 
         this.onStatisticsForAggregation = function(event, data) {
@@ -63,7 +68,7 @@ define([
                     }].map(JSON.stringify)
                 })
 
-            this.dataRequest('search', 'run', searchId, paramsWithStats)
+            return this.dataRequest('search', 'run', searchId, paramsWithStats)
                 .then(function(r) {
                     if (r && r.aggregates) {
                         $(event.target).trigger('aggregationStatistics', {
@@ -91,7 +96,15 @@ define([
                     endpointParameters: {
                         id: this.attr.item.configuration.searchId,
                         size: 0,
-                        aggregations: this.aggregations.map(JSON.stringify)
+                        aggregations: this.aggregations
+                            .map(function(aggregation) {
+                                if (aggregation.isDate) {
+                                    aggregation.interval = aggregation.interval + 'ms';
+                                    delete aggregation.isDate;
+                                }
+                                return aggregation;
+                            })
+                            .map(JSON.stringify)
                     }
                 }
             }
@@ -126,15 +139,30 @@ define([
         };
 
         this.updateAggregationVisibility = function(preventTrigger) {
-            var self = this;
+            var self = this,
+                searchId = this.attr.item.configuration.searchId,
+                conceptType = searchId ? this.searchesById[searchId].parameters.conceptType : null;
 
-            require(['./aggregation'], function(Aggregation) {
-                self.select('aggregationSectionSelector').toggle(!!self.attr.item.configuration.searchId);
-                Aggregation.attachTo(self.select('aggregationSectionSelector'), {
+            return Promise.all([
+                Promise.require('search/dashboard/aggregation'),
+                conceptType && this.dataRequest('ontology', 'propertiesByConceptId', conceptType)
+            ]).spread(function(Aggregation, propertiesByConceptId) {
+                var node = self.select('aggregationSectionSelector');
+
+                node.toggle(!!self.attr.item.configuration.searchId);
+                Aggregation.attachTo(node.teardownComponent(Aggregation), {
                     aggregations: self.aggregations
                 })
+                if (propertiesByConceptId) {
+                    node.trigger('filterProperties', {
+                        properties: propertiesByConceptId.list.filter(function(property) {
+                            return !property.dependentPropertyIris
+                        })
+                    });
+                }
                 var aggregation = _.first(self.aggregations);
-                self.updateAggregationDependents(aggregation && aggregation.type, preventTrigger);
+                return self.updateAggregationDependents(aggregation && aggregation.type, preventTrigger);
+
             });
         };
 
@@ -202,7 +230,9 @@ define([
 
         this.updateAggregationDependents = function(type, preventTrigger) {
             var self = this,
-                item = this.attr.item;
+                item = this.attr.item,
+                searchId = this.attr.item.configuration.searchId,
+                conceptType = searchId ? this.searchesById[searchId].parameters.conceptType : null;
 
             if (type) {
                 if (item.configuration.searchParameters) {
@@ -219,17 +249,23 @@ define([
 
                 Promise.all([
                     this.dataRequest('ontology', 'properties'),
-                    Promise.require('search/sort')
-                ]).done(function(results) {
-                    var properties = results.shift(),
-                        Sort = results.shift(),
-                        node = self.$node.find('.sort').show();
+                    Promise.require('search/sort'),
+                    conceptType && this.dataRequest('ontology', 'propertiesByConceptId', conceptType)
+                ]).spread(function(properties, Sort, propertiesByConceptId) {
+                    var node = self.$node.find('.sort').show(),
+                        sortFieldsNode = node.find('.sort-fields');
 
-                    console.log('showing', type)
-
-                    Sort.attachTo(node.find('.sort-fields').teardownComponent(Sort), {
+                    Sort.attachTo(sortFieldsNode.teardownComponent(Sort), {
                         sorts: self.sortFields
-                    })
+                    });
+
+                    if (propertiesByConceptId) {
+                        sortFieldsNode.trigger('filterProperties', {
+                            properties: propertiesByConceptId.list.filter(function(property) {
+                                return !property.dependentPropertyIris
+                            })
+                        });
+                    }
                 });
                 this.aggregationField = null;
                 if (item.configuration.searchParameters) {
@@ -239,6 +275,17 @@ define([
                 if (preventTrigger !== true) {
                     this.triggerChange();
                 }
+
+                return Promise.all([
+                    this.dataRequest('ontology', 'properties'),
+                    Promise.require('search/sort')
+                ]).spread(function(properties, Sort) {
+                    var node = self.$node.find('.sort').show();
+
+                    Sort.attachTo(node.find('.sort-fields').teardownComponent(Sort), {
+                        sorts: self.sortFields
+                    })
+                });
             }
         };
 
@@ -248,7 +295,7 @@ define([
             }
             return Promise.all([
                 this.dataRequest('ontology', 'properties'),
-                Promise.require('fields/selection/selection')
+                Promise.require('util/ontology/propertySelect')
             ]).done(function(results) {
                 var properties = results.shift(),
                     FieldSelection = results.shift();
@@ -268,7 +315,12 @@ define([
             if (search) {
                 title += ': ' + search.name;
             }
-            this.attr.item.title = title;
+
+            if (this.attr.item.title === this.attr.item.configuration.initialTitle) {
+                this.attr.item.title = title;
+                this.trigger('cardTitleChanged', { title: title });
+            }
+
             this.attr.item.configuration.initialTitle = title;
         };
 

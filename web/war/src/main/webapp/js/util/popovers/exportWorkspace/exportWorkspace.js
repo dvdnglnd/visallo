@@ -15,26 +15,41 @@ define([
             cancelButtonSelector: 'button.btn-default'
         });
 
+        this.before('teardown', function() {
+            this.popover.find('.plugin-content').teardownAllComponents();
+        });
+
         this.before('initialize', function(node, config) {
             config.template = 'exportWorkspace/template';
+            config.showTitle = config.exporter.showPopoverTitle !== false;
+            config.showCancel = config.exporter.showPopoverCancel !== false;
             config.title = i18n('popovers.export_workspace.title', config.exporter.menuItem);
+            config.hideDialog = true;
 
             this.after('setupWithTemplate', function() {
                 var self = this,
                     node = this.popover.find('.plugin-content'),
                     workspaceId = this.attr.workspaceId,
+                    productId = this.attr.productId,
                     exporter = this.attr.exporter;
 
                 this.on(this.popover, 'click', {
                     cancelButtonSelector: this.onCancel
                 });
 
-                require([this.attr.exporter.componentPath], function(C) {
-                    C.attachTo(node, {
-                        workspaceId: workspaceId,
-                        exporter: exporter
-                    });
+                require([exporter.componentPath], function(C) {
+                    var attrs = {
+                        workspaceId,
+                        productId,
+                        exporter,
+                        cy: self.attr.cy
+                    };
 
+                    if (_.isFunction(exporter.attributes)) {
+                        attrs = exporter.attributes(attrs);
+                    }
+                    C.attachTo(node, attrs);
+                    self.dialog.show();
                     self.positionDialog();
                 });
             });

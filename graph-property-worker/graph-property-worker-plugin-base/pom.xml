@@ -5,7 +5,7 @@
     <parent>
         <groupId>org.visallo</groupId>
         <artifactId>visallo-graph-property-worker-group</artifactId>
-        <version>1.1-SNAPSHOT</version>
+        <version>3.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
     <packaging>pom</packaging>
@@ -22,7 +22,7 @@
         </dependency>
         <dependency>
             <groupId>org.visallo</groupId>
-            <artifactId>visallo-test</artifactId>
+            <artifactId>visallo-core-test</artifactId>
             <version>${project.parent.version}</version>
             <scope>test</scope>
         </dependency>

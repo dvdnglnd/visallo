@@ -7,6 +7,7 @@ import com.v5analytics.webster.Handler;
 import com.v5analytics.webster.handlers.StaticResourceHandler;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.visallo.core.config.Configuration;
 import org.visallo.core.exception.VisalloAccessDeniedException;
 import org.visallo.core.exception.VisalloException;
 import org.visallo.core.exception.VisalloResourceNotFoundException;
@@ -22,8 +23,9 @@ import org.visallo.web.routes.Index;
 import org.visallo.web.routes.admin.AdminList;
 import org.visallo.web.routes.admin.AdminUploadOntology;
 import org.visallo.web.routes.admin.PluginList;
-import org.visallo.web.routes.config.Configuration;
 import org.visallo.web.routes.dashboard.*;
+import org.visallo.web.routes.directory.DirectoryGet;
+import org.visallo.web.routes.directory.DirectorySearch;
 import org.visallo.web.routes.edge.*;
 import org.visallo.web.routes.element.ElementSearch;
 import org.visallo.web.routes.longRunningProcess.LongRunningProcessById;
@@ -36,19 +38,14 @@ import org.visallo.web.routes.notification.SystemNotificationDelete;
 import org.visallo.web.routes.notification.SystemNotificationSave;
 import org.visallo.web.routes.notification.UserNotificationMarkRead;
 import org.visallo.web.routes.ontology.Ontology;
-import org.visallo.web.routes.directory.DirectorySearch;
 import org.visallo.web.routes.ping.Ping;
 import org.visallo.web.routes.ping.PingStats;
+import org.visallo.web.routes.product.*;
 import org.visallo.web.routes.resource.MapMarkerImage;
 import org.visallo.web.routes.resource.ResourceExternalGet;
 import org.visallo.web.routes.resource.ResourceGet;
-import org.visallo.web.routes.search.SearchDelete;
-import org.visallo.web.routes.search.SearchList;
-import org.visallo.web.routes.search.SearchRun;
-import org.visallo.web.routes.search.SearchSave;
+import org.visallo.web.routes.search.*;
 import org.visallo.web.routes.user.*;
-import org.visallo.web.routes.userGuide.UserGuide;
-import org.visallo.web.routes.userGuide.UserGuideShortUrl;
 import org.visallo.web.routes.vertex.*;
 import org.visallo.web.routes.workspace.*;
 
@@ -67,6 +64,7 @@ import java.util.Map;
 import static org.vertexium.util.IterableUtils.toList;
 
 public class Router extends HttpServlet {
+    private static final long serialVersionUID = 4689515508877380905L;
     private static final VisalloLogger LOGGER = VisalloLoggerFactory.getLogger(Router.class);
 
     /**
@@ -78,7 +76,7 @@ public class Router extends HttpServlet {
     private static final MultipartConfigElement MULTI_PART_CONFIG = new MultipartConfigElement(System.getProperty("java.io.tmpdir"));
     private static final String GRAPH_TRACE_ENABLE = "graphTraceEnable";
     private WebApp app;
-    private org.visallo.core.config.Configuration configuration;
+    private Configuration configuration;
     private GeocoderRepository geocoderRepository;
 
     @SuppressWarnings("unchecked")
@@ -95,7 +93,7 @@ public class Router extends HttpServlet {
             Class<? extends Handler> csrfProtector = VisalloCsrfHandler.class;
 
             app.get("/", UserAgentFilter.class, csrfProtector, Index.class);
-            app.get("/configuration", csrfProtector, Configuration.class);
+            app.get("/configuration", csrfProtector, org.visallo.web.routes.config.Configuration.class);
             app.post("/logout", csrfProtector, Logout.class);
 
             app.get("/ontology", authenticator, csrfProtector, ReadPrivilegeFilter.class, Ontology.class);
@@ -108,17 +106,22 @@ public class Router extends HttpServlet {
             app.get("/resource", authenticator, csrfProtector, ReadPrivilegeFilter.class, ResourceGet.class);
             app.get("/resource/external", authenticator, csrfProtector, ReadPrivilegeFilter.class, ResourceExternalGet.class);
             app.get("/map/marker/image", csrfProtector, MapMarkerImage.class);  // TODO combine with /resource
+
             if (!(geocoderRepository instanceof DefaultGeocoderRepository)) {
-                configuration.set(org.visallo.core.config.Configuration.WEB_GEOCODER_ENABLED, true);
+                configuration.set(Configuration.WEB_GEOCODER_ENABLED, true);
                 app.get("/map/geocode", authenticator, GetGeocoder.class);
             }
-            if (configuration.get(org.visallo.core.config.Configuration.MAPZEN_TILE_API_KEY, null) == null) {
-                LOGGER.warn("MapZen api key not found: %s", org.visallo.core.config.Configuration.MAPZEN_TILE_API_KEY);
+
+            if (configuration.getBoolean(Configuration.MAPZEN_ENABLED, true)) {
+                if (configuration.get(Configuration.MAPZEN_TILE_API_KEY, null) == null) {
+                    LOGGER.warn("MapZen api key not found: %s", Configuration.MAPZEN_TILE_API_KEY);
+                }
+                app.get("/mapzen/{mapzenUri*}", authenticator, MapzenTileProxy.class);
             }
-            app.get("/mapzen/{mapzenUri*}", authenticator, MapzenTileProxy.class);
 
             app.post("/search/save", authenticator, csrfProtector, SearchSave.class);
             app.get("/search/all", authenticator, csrfProtector, SearchList.class);
+            app.get("/search", authenticator, csrfProtector, SearchGet.class);
             app.get("/search/run", authenticator, csrfProtector, SearchRun.class);
             app.post("/search/run", authenticator, csrfProtector, SearchRun.class);
             app.delete("/search", authenticator, csrfProtector, SearchDelete.class);
@@ -135,6 +138,7 @@ public class Router extends HttpServlet {
             app.get("/vertex/poster-frame", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexPosterFrame.class);
             app.get("/vertex/video-preview", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexVideoPreviewImage.class);
             app.get("/vertex/details", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexDetails.class);
+            app.get("/vertex/history", authenticator, csrfProtector, HistoryReadPrivilegeFilter.class, VertexGetHistory.class);
             app.get("/vertex/property/details", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexPropertyDetails.class);
             app.post("/vertex/import", authenticator, csrfProtector, EditPrivilegeFilter.class, VertexImport.class);
             app.post("/vertex/resolve-term", authenticator, csrfProtector, EditPrivilegeFilter.class, ResolveTermEntity.class);
@@ -143,11 +147,14 @@ public class Router extends HttpServlet {
             app.post("/vertex/unresolve-detected-object", authenticator, csrfProtector, EditPrivilegeFilter.class, UnresolveDetectedObject.class);
             app.get("/vertex/detected-objects", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexGetDetectedObjects.class);
             app.get("/vertex/property", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexGetPropertyValue.class);
-            app.get("/vertex/property/history", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexGetPropertyHistory.class);
+            app.get("/vertex/property/history", authenticator, csrfProtector, HistoryReadPrivilegeFilter.class, VertexGetPropertyHistory.class);
             app.post("/vertex/property", authenticator, csrfProtector, EditPrivilegeFilter.class, VertexSetProperty.class);
+            app.post("/vertex/property/visibility", authenticator, csrfProtector, EditPrivilegeFilter.class, VertexSetPropertyVisibility.class);
             app.post("/vertex/comment", authenticator, csrfProtector, CommentPrivilegeFilter.class, VertexSetProperty.class);
             app.delete("/vertex/property", authenticator, csrfProtector, EditPrivilegeFilter.class, VertexDeleteProperty.class);
+            app.delete("/vertex/comment", authenticator, csrfProtector, CommentPrivilegeFilter.class, VertexDeleteProperty.class);
             app.get("/vertex/term-mentions", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexGetTermMentions.class);
+            app.get("/vertex/resolved-to", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexGetResolvedTo.class);
             app.post("/vertex/visibility", authenticator, csrfProtector, EditPrivilegeFilter.class, VertexSetVisibility.class);
             app.get("/vertex/properties", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexProperties.class);
             app.get("/vertex/edges", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexEdges.class);
@@ -161,13 +168,15 @@ public class Router extends HttpServlet {
             app.post("/vertex/find-related", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexFindRelated.class);
             app.get("/vertex/counts-by-concept-type", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexGetCountsByConceptType.class);
             app.get("/vertex/count", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexGetCount.class);
-            app.get("/vertex/acl", authenticator, csrfProtector, ReadPrivilegeFilter.class, VertexGetAcl.class);
 
-            app.post("/edge/property", authenticator, csrfProtector, EditPrivilegeFilter.class, SetEdgeProperty.class);
-            app.post("/edge/comment", authenticator, csrfProtector, CommentPrivilegeFilter.class, SetEdgeProperty.class);
+            app.post("/edge/property", authenticator, csrfProtector, EditPrivilegeFilter.class, EdgeSetProperty.class);
+            app.post("/edge/property/visibility", authenticator, csrfProtector, EditPrivilegeFilter.class, EdgeSetPropertyVisibility.class);
+            app.post("/edge/comment", authenticator, csrfProtector, CommentPrivilegeFilter.class, EdgeSetProperty.class);
             app.delete("/edge", authenticator, csrfProtector, EditPrivilegeFilter.class, EdgeDelete.class);
             app.delete("/edge/property", authenticator, csrfProtector, EditPrivilegeFilter.class, EdgeDeleteProperty.class);
-            app.get("/edge/property/history", authenticator, csrfProtector, ReadPrivilegeFilter.class, EdgeGetPropertyHistory.class);
+            app.delete("/edge/comment", authenticator, csrfProtector, CommentPrivilegeFilter.class, EdgeDeleteProperty.class);
+            app.get("/edge/history", authenticator, csrfProtector, HistoryReadPrivilegeFilter.class, EdgeGetHistory.class);
+            app.get("/edge/property/history", authenticator, csrfProtector, HistoryReadPrivilegeFilter.class, EdgeGetPropertyHistory.class);
             app.get("/edge/exists", authenticator, csrfProtector, ReadPrivilegeFilter.class, EdgeExists.class);
             app.post("/edge/exists", authenticator, csrfProtector, ReadPrivilegeFilter.class, EdgeExists.class);
             app.post("/edge/multiple", authenticator, csrfProtector, ReadPrivilegeFilter.class, EdgeMultiple.class);
@@ -179,14 +188,10 @@ public class Router extends HttpServlet {
             app.get("/edge/count", authenticator, csrfProtector, ReadPrivilegeFilter.class, EdgeGetCount.class);
             app.get("/edge/search", authenticator, csrfProtector, ReadPrivilegeFilter.class, EdgeSearch.class);
             app.post("/edge/search", authenticator, csrfProtector, ReadPrivilegeFilter.class, EdgeSearch.class);
-            app.get("/edge/acl", authenticator, csrfProtector, ReadPrivilegeFilter.class, EdgeGetAcl.class);
 
             app.get("/workspace/all", authenticator, csrfProtector, ReadPrivilegeFilter.class, WorkspaceList.class);
             app.post("/workspace/create", authenticator, csrfProtector, ReadPrivilegeFilter.class, WorkspaceCreate.class);
             app.get("/workspace/diff", authenticator, csrfProtector, ReadPrivilegeFilter.class, WorkspaceDiff.class);
-            app.get("/workspace/edges", authenticator, csrfProtector, ReadPrivilegeFilter.class, WorkspaceEdges.class);
-            app.post("/workspace/edges", authenticator, csrfProtector, ReadPrivilegeFilter.class, WorkspaceEdges.class); // this is a post method to allow large data (ie data larger than would fit in the URL)
-            app.get("/workspace/vertices", authenticator, csrfProtector, ReadPrivilegeFilter.class, WorkspaceVertices.class);
             app.post("/workspace/update", authenticator, csrfProtector, ReadPrivilegeFilter.class, WorkspaceUpdate.class);
             app.get("/workspace", authenticator, csrfProtector, ReadPrivilegeFilter.class, WorkspaceById.class);
             app.delete("/workspace", authenticator, csrfProtector, ReadPrivilegeFilter.class, WorkspaceDelete.class);
@@ -194,10 +199,16 @@ public class Router extends HttpServlet {
             app.post("/workspace/undo", authenticator, csrfProtector, EditPrivilegeFilter.class, WorkspaceUndo.class);
 
             app.get("/dashboard/all", authenticator, csrfProtector, ReadPrivilegeFilter.class, DashboardAll.class);
-            app.post("/dashboard", authenticator, csrfProtector, EditPrivilegeFilter.class, DashboardUpdate.class);
-            app.delete("/dashboard", authenticator, csrfProtector, EditPrivilegeFilter.class, DashboardDelete.class);
-            app.post("/dashboard/item", authenticator, csrfProtector, EditPrivilegeFilter.class, DashboardItemUpdate.class);
-            app.delete("/dashboard/item", authenticator, csrfProtector, EditPrivilegeFilter.class, DashboardItemDelete.class);
+            app.post("/dashboard", authenticator, csrfProtector, ReadPrivilegeFilter.class, DashboardUpdate.class);
+            app.delete("/dashboard", authenticator, csrfProtector, ReadPrivilegeFilter.class, DashboardDelete.class);
+            app.post("/dashboard/item", authenticator, csrfProtector, ReadPrivilegeFilter.class, DashboardItemUpdate.class);
+            app.delete("/dashboard/item", authenticator, csrfProtector, ReadPrivilegeFilter.class, DashboardItemDelete.class);
+
+            app.get("/product/all", authenticator, csrfProtector, ReadPrivilegeFilter.class, ProductAll.class);
+            app.get("/product", authenticator, csrfProtector, ReadPrivilegeFilter.class, ProductGet.class);
+            app.get("/product/preview", authenticator, csrfProtector, ReadPrivilegeFilter.class, ProductPreview.class);
+            app.post("/product", authenticator, csrfProtector, EditPrivilegeFilter.class, ProductUpdate.class);
+            app.delete("/product", authenticator, csrfProtector, EditPrivilegeFilter.class, ProductDelete.class);
 
             app.get("/user/me", authenticator, csrfProtector, MeGet.class);
             app.post("/user/ui-preferences", authenticator, csrfProtector, UserSetUiPreferences.class);
@@ -205,6 +216,7 @@ public class Router extends HttpServlet {
             app.post("/user/all", authenticator, csrfProtector, UserList.class);
             app.get("/user", authenticator, csrfProtector, AdminPrivilegeFilter.class, UserGet.class);
 
+            app.get("/directory/get", authenticator, csrfProtector, DirectoryGet.class);
             app.get("/directory/search", authenticator, csrfProtector, DirectorySearch.class);
 
             app.get("/long-running-process", authenticator, csrfProtector, LongRunningProcessById.class);
@@ -218,9 +230,6 @@ public class Router extends HttpServlet {
             app.get("/ping", RateLimitFilter.class, Ping.class);
             app.get("/ping/stats", authenticator, AdminPrivilegeFilter.class, PingStats.class);
 
-            app.get(UserGuideShortUrl.CONTEXT_PATH + "/{key*}", authenticator, csrfProtector, UserGuideShortUrl.class);
-            app.get(UserGuide.CONTEXT_PATH + "/{path*}", authenticator, csrfProtector, UserGuide.class);
-
             List<WebAppPlugin> webAppPlugins = toList(ServiceLoaderUtil.load(WebAppPlugin.class, configuration));
             for (WebAppPlugin webAppPlugin : webAppPlugins) {
                 LOGGER.info("Loading webapp plugin: %s", webAppPlugin.getClass().getName());
@@ -231,11 +240,13 @@ public class Router extends HttpServlet {
                 }
             }
 
-            app.get("/css/images/ui-icons_222222_256x240.png",
+            app.get(
+                    "/css/images/ui-icons_222222_256x240.png",
                     new StaticResourceHandler(
                             this.getClass(),
                             "/org/visallo/web/routes/resource/ui-icons_222222_256x240.png",
-                            "image/png")
+                            "image/png"
+                    )
             );
 
             app.onException(VisalloAccessDeniedException.class, new ErrorCodeHandler(HttpServletResponse.SC_FORBIDDEN));
@@ -247,6 +258,7 @@ public class Router extends HttpServlet {
 
     @Override
     protected void service(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+        LOGGER.debug("servicing %s", request.getRequestURI());
         TraceSpan trace = null;
         CurrentUser.setUserInLogMappedDiagnosticContexts(request);
         try {
@@ -268,7 +280,7 @@ public class Router extends HttpServlet {
             app.handle(request, response);
         } catch (ConnectionClosedException cce) {
             LOGGER.debug("Connection closed by client", cce);
-        } catch (Exception e) {
+        } catch (Throwable e) {
             handleException(request, response, e);
         } finally {
             if (trace != null) {
@@ -279,7 +291,7 @@ public class Router extends HttpServlet {
         }
     }
 
-    private void handleException(HttpServletRequest request, HttpServletResponse response, Exception e)
+    private void handleException(HttpServletRequest request, HttpServletResponse response, Throwable e)
             throws IOException, ServletException {
         if (e.getCause() instanceof VisalloResourceNotFoundException) {
             handleNotFound(response, (VisalloResourceNotFoundException) e.getCause());
@@ -331,7 +343,7 @@ public class Router extends HttpServlet {
     }
 
     @Inject
-    public void setConfiguration(org.visallo.core.config.Configuration configuration) {
+    public void setConfiguration(Configuration configuration) {
         this.configuration = configuration;
     }
 

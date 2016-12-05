@@ -1,33 +1,44 @@
 define([
     'require',
-    'configuration/plugins/registry'
-], function(require, registry) {
+    'configuration/plugins/registry',
+    '../store'
+], function(require, registry, store) {
     'use strict';
 
     var NOOP = function() {},
-        storeTypeForData = function(data) {
-            return ('graphVertexId' in data) ? 'vertex' : ('graphEdgeId' in data) ? 'edge' : null;
-        },
         socketHandlers = {
             workspaceChange: function(data, json) {
-                require(['../util/store'], function(store) {
-                    store.workspaceWasChangedRemotely(data);
-                })
+                require(['../store/workspace/actions-impl'], function(actions) {
+                    store.getStore().dispatch(actions.update({ workspace: data }))
+                });
             },
             workspaceDelete: function(data) {
-                require([
-                    '../util/store',
-                    './workspaceSwitch'
-                ], function(store, workspaceSwitch) {
-                    store.removeWorkspace(data.workspaceId);
-                    workspaceSwitch(data);
-                    dispatchMain('rebroadcastEvent', {
-                        eventName: 'workspaceDeleted',
-                        data: {
-                            workspaceId: data.workspaceId
-                        }
-                    })
+                require(['../store/workspace/actions-impl'], function(actions) {
+                    store.getStore().dispatch(actions.deleteWorkspace({ workspaceId: data.workspaceId }));
                 });
+            },
+            workProductPreviewChange: function(data) {
+                const { id, workspaceId, md5 } = data;
+                require(['../store/product/actions-impl'], function(actions) {
+                    store.getStore().dispatch(actions.previewChanged({ productId: id, workspaceId, md5 }));
+                })
+            },
+            workProductChange: function(data) {
+                const guid = publicData.socketSourceGuid;
+                if ('skipSourceGuid' in data) {
+                    if (guid === data.skipSourceGuid) {
+                        return;
+                    }
+                }
+
+                require(['../store/product/actions-impl'], function(actions) {
+                    store.getStore().dispatch(actions.changedOnServer(data.id));
+                })
+            },
+            workProductDelete: function(data) {
+                require(['../store/product/actions-impl'], function(actions) {
+                    store.getStore().dispatch(actions.remove(data.id))
+                })
             },
             sessionExpiration: function(data) {
                 dispatchMain('rebroadcastEvent', {
@@ -35,7 +46,6 @@ define([
                 });
             },
             userStatusChange: (function() {
-                // TODO: put into store
                 var previousById = {};
                 return function(data) {
                     var previous = data && previousById[data.id];
@@ -56,98 +66,18 @@ define([
                 }
             },
             propertyChange: function(data) {
-                var type = storeTypeForData(data),
-                    objectId = type && (data.graphVertexId || data.graphEdgeId);
-
-                if (!type) {
-                    throw new Error('Property change sent unknown type', data);
-                }
-
-                require(['../util/store'], function(store) {
-                    var storeObject = store.getObject(publicData.currentWorkspaceId, type, objectId),
-                        edgeCreation = type === 'edge' && !('propertyName' in data);
-                    if (storeObject || edgeCreation) {
-                        require(['../services/' + type], function(service) {
-                            service.properties(objectId)
-                                .catch(function(error) {
-                                    // Ignore 404's since we need to check if
-                                    // we have access to changed object
-                                    if (!error || error.status !== 404) {
-                                        throw error;
-                                    }
-
-                                    if (type === 'vertex') {
-                                        store.removeWorkspaceVertexIds(publicData.currentWorkspaceId, objectId);
-                                        dispatchMain('rebroadcastEvent', {
-                                            eventName: 'verticesDeleted',
-                                            data: {
-                                                vertexIds: [objectId]
-                                            }
-                                        });
-                                    } else {
-                                        store.removeObject(publicData.currentWorkspaceId, 'edge', objectId);
-                                        dispatchMain('rebroadcastEvent', {
-                                            eventName: 'edgesDeleted',
-                                            data: {
-                                                edgeId: objectId
-                                            }
-                                        });
-                                    }
-                                }).done();
-                        });
-                    }
+                require(['../store/element/actions-impl'], function(actions) {
+                    store.getStore().dispatch(actions.propertyChange(data));
                 });
             },
             verticesDeleted: function(data) {
-                require(['../util/store'], function(store) {
-                    var storeObjects = _.compact(
-                            store.getObjects(publicData.currentWorkspaceId, 'vertex', data.vertexIds)
-                        );
-                    if (storeObjects.length) {
-                        require(['../services/vertex'], function(vertex) {
-                            vertex.exists(_.pluck(storeObjects, 'id'))
-                                .then(function(existsResponse) {
-                                    var deleted = _.keys(_.pick(existsResponse.exists, function(exists) {
-                                        return !exists;
-                                    }));
-                                    if (deleted.length) {
-                                        store.removeWorkspaceVertexIds(publicData.currentWorkspaceId, deleted);
-                                        dispatchMain('rebroadcastEvent', {
-                                            eventName: 'verticesDeleted',
-                                            data: {
-                                                vertexIds: data.vertexIds
-                                            }
-                                        });
-                                    }
-                                })
-                                .catch(function() {
-                                    store.removeWorkspaceVertexIds(publicData.currentWorkspaceId, data.vertexIds);
-                                    dispatchMain('rebroadcastEvent', {
-                                        eventName: 'verticesDeleted',
-                                        data: {
-                                            vertexIds: data.vertexIds
-                                        }
-                                    });
-                                });
-                        });
-                    }
+                require(['../store/element/actions-impl'], function(actions) {
+                    store.getStore().dispatch(actions.deleteElements({ vertexIds: data.vertexIds }));
                 });
             },
             edgeDeletion: function(data) {
-                require([
-                    '../util/store',
-                    '../services/edge'
-                ], function(store, edge) {
-                    edge.exists([data.edgeId])
-                        .then(function(r) {
-                            if (!r.exists[data.edgeId]) {
-                                store.removeObject(publicData.currentWorkspaceId, 'edge', data.edgeId);
-                                dispatchMain('rebroadcastEvent', {
-                                    eventName: 'edgesDeleted',
-                                    data: data
-                                });
-                            }
-                        })
+                require(['../store/element/actions-impl'], function(actions) {
+                    store.getStore().dispatch(actions.deleteElements({ edgeIds: [data.edgeId] }));
                 });
             },
             textUpdated: function(data) {
@@ -221,12 +151,20 @@ define([
         var body = data.responseBody,
             json = JSON.parse(body);
 
-        if (messageFromUs(json)) {
-            return;
+        if (isBatchMessage(json)) {
+            var filtered = _.reject(json.data, messageFromUs);
+            if (filtered.length) {
+                console.groupCollapsed('Socket Batch (' + filtered.length + ')');
+                filtered.forEach(process);
+                console.groupEnd();
+            }
+        } else if (!messageFromUs(json)) {
+            process(json);
         }
+    }
 
-        console.debug('%cSocket: %s %O', 'color:#999;font-style:italics', json.type, json.data)
-
+    function process(json) {
+        console.debug('%cSocket: %s %O', 'color:#999;font-style:italics', json.type, json.data || json)
         if (json.type in socketHandlers) {
             socketHandlers[json.type]('data' in json ? json.data : json, json);
             callHandlersForName(json.type, json.data);
@@ -237,5 +175,9 @@ define([
 
     function messageFromUs(json) {
         return json.sourceGuid && json.sourceGuid === publicData.socketSourceGuid;
+    }
+
+    function isBatchMessage(json) {
+        return json.type === 'batch' && _.isArray(json.data);
     }
 });

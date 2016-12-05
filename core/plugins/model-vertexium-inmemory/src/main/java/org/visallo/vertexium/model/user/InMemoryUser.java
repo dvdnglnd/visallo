@@ -1,13 +1,15 @@
 package org.visallo.vertexium.model.user;
 
-import com.v5analytics.simpleorm.SimpleOrmContext;
+import com.google.common.collect.ImmutableMap;
 import org.json.JSONObject;
 import org.visallo.core.user.User;
-import org.visallo.web.clientapi.model.Privilege;
 import org.visallo.web.clientapi.model.UserStatus;
 import org.visallo.web.clientapi.model.UserType;
 
-import java.util.*;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
 
 public class InMemoryUser implements User {
     private final String userId;
@@ -15,8 +17,6 @@ public class InMemoryUser implements User {
     private final String displayName;
     private final String emailAddress;
     private final Date createDate;
-    private Set<Privilege> privileges;
-    private final List<String> authorizations;
     private final String currentWorkspaceId;
     private JSONObject preferences;
     private Date currentLoginDate;
@@ -26,23 +26,21 @@ public class InMemoryUser implements User {
     private int loginCount;
     private String passwordResetToken;
     private Date passwordResetTokenExpirationDate;
+    private Map<String, Object> properties = new HashMap<>();
 
-    public InMemoryUser(String userName, String displayName, String emailAddress, Set<Privilege> privileges, String[] authorizations, String currentWorkspaceId) {
+    public InMemoryUser(
+            String userName,
+            String displayName,
+            String emailAddress,
+            String currentWorkspaceId
+    ) {
         this.userId = UUID.randomUUID().toString();
         this.userName = userName;
         this.displayName = displayName;
         this.emailAddress = emailAddress;
         this.createDate = new Date();
-        this.privileges = privileges;
-        this.authorizations = new ArrayList<String>();
-        Collections.addAll(this.authorizations, authorizations);
         this.currentWorkspaceId = currentWorkspaceId;
         this.preferences = new JSONObject();
-    }
-
-    @Override
-    public SimpleOrmContext getSimpleOrmContext() {
-        throw new RuntimeException("not implemented");
     }
 
     @Override
@@ -110,28 +108,6 @@ public class InMemoryUser implements User {
         return this.currentWorkspaceId;
     }
 
-    public Set<Privilege> getPrivileges() {
-        return this.privileges;
-    }
-
-    public String[] getAuthorizations() {
-        return authorizations.toArray(new String[this.authorizations.size()]);
-    }
-
-    public void addAuthorization(String authorization) {
-        if (!authorizations.contains(authorization)) {
-            authorizations.add(authorization);
-        }
-    }
-
-    public void removeAuthorization(String authorization) {
-        authorizations.remove(authorization);
-    }
-
-    public void setPrivileges(Set<Privilege> privileges) {
-        this.privileges = privileges;
-    }
-
     @Override
     public JSONObject getUiPreferences() {
         return preferences;
@@ -149,6 +125,20 @@ public class InMemoryUser implements User {
     @Override
     public Date getPasswordResetTokenExpirationDate() {
         return passwordResetTokenExpirationDate;
+    }
+
+    @Override
+    public Object getProperty(String propertyName) {
+        return properties.get(propertyName);
+    }
+
+    @Override
+    public Map<String, Object> getCustomProperties() {
+        return ImmutableMap.copyOf(properties);
+    }
+
+    public void setProperty(String propertyName, Object value) {
+        properties.put(propertyName, value);
     }
 
     @Override

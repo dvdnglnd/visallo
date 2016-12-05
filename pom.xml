@@ -4,13 +4,14 @@
     <parent>
         <groupId>org.visallo</groupId>
         <artifactId>visallo-root</artifactId>
-        <version>1.1-SNAPSHOT</version>
-        <relativePath></relativePath>
+        <version>3.1-SNAPSHOT</version>
+        <relativePath>./root</relativePath>
     </parent>
     <modelVersion>4.0.0</modelVersion>
     <artifactId>visallo</artifactId>
     <packaging>pom</packaging>
     <name>Visallo</name>
+    <version>3.1-SNAPSHOT</version>
 
     <scm>
         <url>https://github.com/v5analytics/visallo</url>
@@ -18,44 +19,13 @@
         <developerConnection>scm:git:ssh://git@github.com:v5analytics/visallo.git</developerConnection>
     </scm>
 
-    <repositories>
-        <repository>
-            <id>v5analytics</id>
-            <url>https://mvn.v5analytics.com/content/groups/org.visallo</url>
-        </repository>
-        <repository>
-            <id>v5analytics-snapshots</id>
-            <snapshots>
-                <enabled>true</enabled>
-                <updatePolicy>interval:60</updatePolicy>
-            </snapshots>
-            <url>https://mvn.v5analytics.com/content/groups/org.visallo-snapshots</url>
-        </repository>
-        <repository>
-            <id>v5analytics-public</id>
-            <url>https://mvn.v5analytics.com/content/groups/public</url>
-        </repository>
-        <repository>
-            <id>v5analytics-snapshots-public</id>
-            <snapshots>
-                <enabled>true</enabled>
-                <updatePolicy>interval:60</updatePolicy>
-            </snapshots>
-            <url>https://mvn.v5analytics.com/content/groups/public-snapshots</url>
-        </repository>
-    </repositories>
-
     <modules>
+        <module>archetype</module>
         <module>common</module>
+        <module>config</module>
         <module>core</module>
-        <module>datasets</module>
         <module>dev</module>
-        <module>docker</module>
-        <module>examples</module>
         <module>graph-property-worker</module>
-        <module>integration-test</module>
-        <module>plugin-toggle</module>
-        <module>dist</module>
         <module>tools</module>
         <module>web</module>
     </modules>
@@ -99,6 +69,19 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
 
     <profiles>
         <!-- Disable JDK8 doclint in javadoc plugin -->

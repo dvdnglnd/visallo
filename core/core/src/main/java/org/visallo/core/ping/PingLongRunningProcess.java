@@ -17,25 +17,31 @@ import org.visallo.core.util.ClientApiConverter;
 public class PingLongRunningProcess extends LongRunningProcessWorker {
     private final UserRepository userRepository;
     private final Graph graph;
+    private final PingUtil pingUtil;
+    private final AuthorizationRepository authorizationRepository;
 
     @Inject
     public PingLongRunningProcess(
+            AuthorizationRepository authorizationRepository,
             UserRepository userRepository,
             Graph graph,
-            AuthorizationRepository authorizationRepository
+            PingUtil pingUtil
     ) {
+        this.authorizationRepository = authorizationRepository;
         this.userRepository = userRepository;
         this.graph = graph;
-
-        PingUtil.setup(authorizationRepository, userRepository);
+        this.pingUtil = pingUtil;
     }
 
     @Override
     protected void processInternal(JSONObject jsonObject) {
-        PingLongRunningProcessQueueItem queueItem = ClientApiConverter.toClientApi(jsonObject.toString(), PingLongRunningProcessQueueItem.class);
-        Authorizations authorizations = userRepository.getAuthorizations(userRepository.getSystemUser());
+        PingLongRunningProcessQueueItem queueItem = ClientApiConverter.toClientApi(
+                jsonObject.toString(),
+                PingLongRunningProcessQueueItem.class
+        );
+        Authorizations authorizations = authorizationRepository.getGraphAuthorizations(userRepository.getSystemUser());
         Vertex vertex = graph.getVertex(queueItem.getVertexId(), authorizations);
-        PingUtil.lrpUpdate(vertex, graph, authorizations);
+        pingUtil.lrpUpdate(vertex, graph, authorizations);
     }
 
     @Override

@@ -40,28 +40,18 @@ define([
         this.updateButton = function($button, workspaceId) {
             var self = this,
                 onDifferentWorkspace = workspaceId !== this.attr.process.workspaceId,
-                noResults = (self.attr.process.resultsCount || 0) === 0;
+                noResults = (self.attr.process.resultsCount || 0) === 0,
+                disabled = onDifferentWorkspace || noResults;
 
-            this.dataRequest('workspace', 'store', workspaceId)
-                .done(function(workspaceVertices) {
-                    var sourceDestInWorkspace = (self.attr.process.outVertexId in workspaceVertices) &&
-                            (self.attr.process.inVertexId in workspaceVertices),
-                        disabled = onDifferentWorkspace ||
-                            noResults ||
-                            !sourceDestInWorkspace;
+            if (disabled) {
+                $button.attr('disabled', true);
+            } else {
+                $button.removeAttr('disabled');
+            }
 
-                    if (disabled) {
-                        $button.attr('disabled', true);
-                    } else {
-                        $button.removeAttr('disabled');
-                    }
-
-                    $button.attr('title', onDifferentWorkspace ?
-                        i18n('popovers.find_path.wrong_workspace') :
-                        !sourceDestInWorkspace ?
-                        i18n('popovers.find_path.source_dest_missing') :
-                        i18n('popovers.find_path.show_path'));
-                });
+            $button.attr('title', onDifferentWorkspace ?
+                i18n('popovers.find_path.wrong_workspace') :
+                i18n('popovers.find_path.show_path'));
         };
 
         this.onWorkspaceLoaded = function(event, data) {
@@ -83,10 +73,7 @@ define([
         };
 
         this.onFocusPaths = function(event, data) {
-            // FIXME: if multiple paths using same src, dest it doesn't reset
-            // the others
-            if (data.sourceId !== this.attr.process.outVertexId ||
-               data.targetId !== this.attr.process.inVertexId) {
+            if (data.processId !== this.attr.process.id) {
                 this.loadDefaultContent();
             }
         };
@@ -96,26 +83,7 @@ define([
         };
 
         this.onAddVertices = function(event) {
-            var self = this,
-                vertexIds = [],
-                vertices = _.map(this.toAdd, function(vertexId) {
-                    vertexIds.push(vertexId);
-                    return {
-                        vertexId: vertexId,
-                        graphLayoutJson: {
-                            layoutType: 'path',
-                            map: self.addToLayout
-                        }
-                    }
-                });
-
-            this.trigger('updateWorkspace', {
-                options: {
-                    selectAll: true
-                },
-                entityUpdates: vertices
-            });
-            this.trigger('selectObjects', { vertexIds: vertexIds });
+            this.trigger('focusPathsAddVertexIds');
             this.loadDefaultContent();
         };
 
@@ -123,48 +91,16 @@ define([
             var self = this,
                 $target = $(event.target).addClass('loading').attr('disabled', true);
 
-            Promise.all([
-                this.dataRequest('longRunningProcess', 'get', this.attr.process.id),
-                this.dataRequest('workspace', 'store', this.attr.process.workspaceId)
-            ])
-                .done(function(results) {
-                    var process = results.shift(),
-                        workspaceVertices = results.shift(),
-                        paths = process.results && process.results.paths || [],
-                        allVertices = _.flatten(paths),
-                        vertices = _.chain(allVertices)
-                            .unique()
-                            .reject(function(vertexId) {
-                                return vertexId in workspaceVertices;
-                            })
-                            .value(),
-                        map = {};
-
-                    for (var i = 0; i < vertices.length; i++) {
-                        pathLoop: for (var j = 0; j < paths.length; j++) {
-                            for (var x = 0; x < paths[j].length; x++) {
-                                if (paths[j][x] === vertices[i]) {
-                                    // If first or last in path the source/dest
-                                    // aren't in the graph
-                                    if (x !== 0 || x !== (paths[j].length - 1)) {
-                                        map[vertices[i]] = {
-                                            sourceId: paths[j][x - 1],
-                                            targetId: paths[j][x + 1]
-                                        };
-                                    }
-                                    break pathLoop;
-                                }
-                            }
-                        }
-                    }
-
-                    self.toAdd = vertices;
-                    self.toAddLayout = map;
+            this.dataRequest('longRunningProcess', 'get', this.attr.process.id)
+                .done(function(process) {
+                    var paths = process.results && process.results.paths || [],
+                        vertices = _.chain(paths).flatten().uniq().value();
 
                     self.trigger('focusPaths', {
                         paths: paths,
                         sourceId: self.attr.process.outVertexId,
-                        targetId: self.attr.process.inVertexId
+                        targetId: self.attr.process.inVertexId,
+                        processId: self.attr.process.id
                     });
 
                     $target.hide();
@@ -175,11 +111,7 @@ define([
                         $addButton.attr('disabled', true);
                     }
 
-                    $addButton.text(i18n('popovers.find_path.add.' + (
-                        vertices.length === 0 ? 'none' :
-                        vertices.length === 1 ? 'one' : 'some'
-                    ), vertices.length));
-
+                    $addButton.text(i18n('popovers.find_path.add'));
                     self.$node.append($addButton);
                 })
         };

@@ -20,6 +20,8 @@ public class ExternalResourceRunner {
     private final Configuration config;
     private final User user;
     private final StatusRepository statusRepository;
+    private List<RunningWorker> runningWorkers = new ArrayList<>();
+    private StatusServer statusServer = null;
 
     public ExternalResourceRunner(
             Configuration config,
@@ -51,20 +53,23 @@ public class ExternalResourceRunner {
     }
 
     public Collection<RunningWorker> startAll() {
-        final List<RunningWorker> runningWorkers = new ArrayList<>();
+        runningWorkers = new ArrayList<>();
         if (config.getBoolean(Configuration.STATUS_ENABLED, Configuration.STATUS_ENABLED_DEFAULT)) {
-            startStatusServer(runningWorkers);
+            statusServer = startStatusServer(runningWorkers);
         }
 
-        Collection<ExternalResourceWorker> workers = InjectHelper.getInjectedServices(ExternalResourceWorker.class, config);
+        Collection<ExternalResourceWorker> workers = InjectHelper.getInjectedServices(
+                ExternalResourceWorker.class,
+                config
+        );
         for (final ExternalResourceWorker worker : workers) {
             runningWorkers.add(start(worker, user));
         }
         return runningWorkers;
     }
 
-    private void startStatusServer(final List<RunningWorker> runningWorkers) {
-        new StatusServer(config, statusRepository, "externalResource", ExternalResourceRunner.class) {
+    private StatusServer startStatusServer(final List<RunningWorker> runningWorkers) {
+        return new StatusServer(config, statusRepository, "externalResource", ExternalResourceRunner.class) {
             @Override
             protected ExternalResourceRunnerStatus createStatus() {
                 ExternalResourceRunnerStatus status = new ExternalResourceRunnerStatus();
@@ -78,14 +83,11 @@ public class ExternalResourceRunner {
 
     private RunningWorker start(final ExternalResourceWorker worker, final User user) {
         worker.prepare(user);
-        Thread t = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    worker.run();
-                } catch (Throwable ex) {
-                    LOGGER.error("Failed running external resource worker: " + worker.getClass().getName(), ex);
-                }
+        Thread t = new Thread(() -> {
+            try {
+                worker.run();
+            } catch (Throwable ex) {
+                LOGGER.error("Failed running external resource worker: " + worker.getClass().getName(), ex);
             }
         });
         t.setName("external-resource-worker-" + worker.getClass().getSimpleName() + "-" + t.getId());
@@ -93,6 +95,18 @@ public class ExternalResourceRunner {
         LOGGER.debug("starting external resource worker thread: %s", t.getName());
         t.start();
         return new RunningWorker(worker, t);
+    }
+
+    public void shutdown() {
+        LOGGER.debug("Stopping ExternalResourceRunner...");
+        for (RunningWorker worker : runningWorkers) {
+            worker.shutdown();
+        }
+
+        if (statusServer != null) {
+            statusServer.shutdown();
+        }
+        LOGGER.debug("Stopped ExternalResourceRunner");
     }
 
     public static class RunningWorker {
@@ -120,6 +134,10 @@ public class ExternalResourceRunner {
                 status.getMetrics().put(metric.getName(), Status.Metric.create(metric.getMetric()));
             }
             return status;
+        }
+
+        public void shutdown() {
+            worker.stop();
         }
     }
 }

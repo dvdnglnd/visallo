@@ -1,58 +1,49 @@
 package org.visallo.vertexium.model.user;
 
-import com.google.common.base.Predicate;
 import com.google.common.collect.Iterables;
 import com.v5analytics.simpleorm.SimpleOrmSession;
 import org.json.JSONObject;
-import org.vertexium.Authorizations;
-import org.vertexium.Graph;
 import org.visallo.core.config.Configuration;
+import org.visallo.core.exception.VisalloException;
 import org.visallo.core.model.lock.LockRepository;
-import org.visallo.core.model.notification.UserNotificationRepository;
-import org.visallo.core.model.user.UserRepository;
-import org.visallo.core.model.user.UserSessionCounterRepository;
+import org.visallo.core.model.user.*;
 import org.visallo.core.model.workQueue.WorkQueueRepository;
 import org.visallo.core.user.SystemUser;
 import org.visallo.core.user.User;
-import org.visallo.web.clientapi.model.Privilege;
 import org.visallo.web.clientapi.model.UserStatus;
 
 import javax.inject.Inject;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
 
 public class InMemoryUserRepository extends UserRepository {
-    private final Graph graph;
     private List<User> users = new ArrayList<>();
 
     @Inject
     public InMemoryUserRepository(
-            Graph graph,
             Configuration configuration,
             SimpleOrmSession simpleOrmSession,
             UserSessionCounterRepository userSessionCounterRepository,
             WorkQueueRepository workQueueRepository,
-            UserNotificationRepository userNotificationRepository,
-            LockRepository lockRepository
+            LockRepository lockRepository,
+            AuthorizationRepository authorizationRepository,
+            PrivilegeRepository privilegeRepository
     ) {
         super(
                 configuration,
                 simpleOrmSession,
                 userSessionCounterRepository,
                 workQueueRepository,
-                userNotificationRepository,
-                lockRepository
+                lockRepository,
+                authorizationRepository,
+                privilegeRepository
         );
-        this.graph = graph;
     }
 
     @Override
     public User findByUsername(final String username) {
-        return Iterables.find(this.users, new Predicate<User>() {
-            @Override
-            public boolean apply(User user) {
-                return user.getUsername().equals(username);
-            }
-        }, null);
+        return Iterables.find(this.users, user -> user.getUsername().equals(username), null);
     }
 
     @Override
@@ -62,26 +53,31 @@ public class InMemoryUserRepository extends UserRepository {
 
     @Override
     public User findById(final String userId) {
-        return Iterables.find(this.users, new Predicate<User>() {
-            @Override
-            public boolean apply(User user) {
-                return user.getUserId().equals(userId);
-            }
-        }, null);
+        return Iterables.find(this.users, user -> user.getUserId().equals(userId), null);
     }
 
     @Override
-    protected User addUser(String username, String displayName, String emailAddress, String password, String[] userAuthorizations) {
+    protected User addUser(
+            String username,
+            String displayName,
+            String emailAddress,
+            String password
+    ) {
         username = formatUsername(username);
         displayName = displayName.trim();
-        InMemoryUser user = new InMemoryUser(username, displayName, emailAddress, getDefaultPrivileges(), userAuthorizations, null);
+        InMemoryUser user = new InMemoryUser(
+                username,
+                displayName,
+                emailAddress,
+                null
+        );
         afterNewUserAdded(user);
         users.add(user);
         return user;
     }
 
     @Override
-    public void setPassword(User user, String password) {
+    public void setPassword(User user, byte[] salt, byte[] passwordHash) {
         throw new RuntimeException("Not implemented");
     }
 
@@ -91,7 +87,7 @@ public class InMemoryUserRepository extends UserRepository {
     }
 
     @Override
-    public void recordLogin(User user, String remoteAddr) {
+    public void updateUser(User user, AuthorizationContext authorizationContext) {
         throw new RuntimeException("Not implemented");
     }
 
@@ -116,24 +112,6 @@ public class InMemoryUserRepository extends UserRepository {
     }
 
     @Override
-    public void internalAddAuthorization(User user, String auth, User authUser) {
-        ((InMemoryUser) user).addAuthorization(auth);
-    }
-
-    @Override
-    public void internalRemoveAuthorization(User user, String auth, User authUser) {
-        ((InMemoryUser) user).removeAuthorization(auth);
-    }
-
-    @Override
-    public Authorizations getAuthorizations(User user, String... additionalAuthorizations) {
-        List<String> auths = new ArrayList<>();
-        Collections.addAll(auths, ((InMemoryUser) user).getAuthorizations());
-        Collections.addAll(auths, additionalAuthorizations);
-        return this.graph.createAuthorizations(auths.toArray(new String[auths.size()]));
-    }
-
-    @Override
     public void setDisplayName(User user, String displayName) {
         throw new RuntimeException("Not implemented");
     }
@@ -144,21 +122,8 @@ public class InMemoryUserRepository extends UserRepository {
     }
 
     @Override
-    public Set<Privilege> getPrivileges(User user) {
-        if (user instanceof SystemUser) {
-            return Privilege.ALL;
-        }
-        return user.getPrivileges();
-    }
-
-    @Override
     protected void internalDelete(User user) {
 
-    }
-
-    @Override
-    protected void internalSetPrivileges(User user, Set<Privilege> privileges, User authUser) {
-        ((InMemoryUser) user).setPrivileges(privileges);
     }
 
     @Override
@@ -174,5 +139,13 @@ public class InMemoryUserRepository extends UserRepository {
     @Override
     public void clearPasswordResetTokenAndExpirationDate(User user) {
         throw new RuntimeException("Not implemented");
+    }
+
+    @Override
+    public void setPropertyOnUser(User user, String propertyName, Object value) {
+        if (user instanceof SystemUser) {
+            throw new VisalloException("Cannot set properties on system user");
+        }
+        ((InMemoryUser) user).setProperty(propertyName, value);
     }
 }

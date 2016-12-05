@@ -25,13 +25,18 @@
   @color: darken(@pane-background, 30%);
   margin-top: 1px;
 
-  & > h1 {
+  & > h1, .collapsible-header {
     .badge {      
       position: absolute;
       right: 1ex;
       left: auto;
       top: 0.4ex;
 
+      &.loading {
+        left: auto;
+        right: 10px;
+        top: 2px;
+      }
       &:not(.loading) {
         background: inherit;
         color: @color;
@@ -47,6 +52,19 @@
     }
     & > div, .collapsible-section {
       display: block;
+    }
+
+    .collapsible {
+      & > h1, .collapsible-header {
+        &:before {
+          .rotate(0);
+        }
+      }
+      &.expanded {
+        & > h1, .collapsible-header {
+          .twizzle-expand;
+        }
+      }
     }
   }
   
@@ -94,5 +112,14 @@
       white-space: nowrap;
       padding-right: 3em;
     }
+  }
+
+  &.disabled > h1:before,
+  &.disabled .collapsible-header:before {
+    display: none;
+  }
+  &.disabled > h1,
+  &.disabled .collapsible-header {
+    cursor: default;
   }
 }

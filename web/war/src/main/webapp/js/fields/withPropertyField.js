@@ -1,5 +1,8 @@
 
-define(['util/withTeardown'], function(withTeardown) {
+define([
+    'util/withTeardown',
+    'util/promise'
+], function(withTeardown, Promise) {
     'use strict';
 
     var ENTER = 13;
@@ -28,7 +31,7 @@ define(['util/withTeardown'], function(withTeardown) {
                     i18n(true, 'field.' + config.property.dataType + '.placeholder') ||
                     config.property.displayName
                 ) : config.property.displayName;
-        })
+        });
 
         this.after('initialize', function() {
             var self = this;
@@ -43,11 +46,12 @@ define(['util/withTeardown'], function(withTeardown) {
                 });
             }
 
+            this.on('input', this.onInput);
             this.on('focusPropertyField', function() {
                 _.defer(function() {
                     self.select('inputSelector').eq(0).focus().select();
                 })
-            })
+            });
 
             if (!_.isFunction(this.getValue)) {
                 throw new Error('getValue is required function for fields');
@@ -60,7 +64,13 @@ define(['util/withTeardown'], function(withTeardown) {
             this.on('fieldRendered', function handler() {
                 this.off('fieldRendered', handler);
                 rendered();
-            })
+            });
+
+            this.on('setValue', function(event, value) {
+                event.stopPropagation();
+                this.setValue(value);
+            });
+
             if (this.attr.asyncRender !== true) {
                 this.trigger('fieldRendered');
             }
@@ -107,10 +117,16 @@ define(['util/withTeardown'], function(withTeardown) {
                     })
                 }
 
-                self.setValue(self.attr.value);
-                self.triggerFieldUpdated();
+                Promise.resolve(self.setValue(self.attr.value))
+                    .then(function() {
+                        self.triggerFieldUpdated();
+                    });
             }
         });
+
+        this.onInput = function(event, data) {
+            this.fieldUpdated(this.getValue(), { fromEvent: 'input' });
+        };
 
         this.triggerFieldUpdated = function() {
             this.fieldUpdated(this.getValue());
@@ -140,7 +156,9 @@ define(['util/withTeardown'], function(withTeardown) {
                             metadata: _.isFunction(self.getMetadata) && self.getMetadata() || {},
                             options: options
                         });
-                        self.setValue(value);
+                        if (!options || options.fromEvent !== 'input') {
+                            self.setValue(value);
+                        }
                     }
                     inputs.removeClass('invalid');
                     self._previousValue = value;

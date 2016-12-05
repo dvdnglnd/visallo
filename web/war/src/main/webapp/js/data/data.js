@@ -1,6 +1,7 @@
-
+/*eslint strict:0 */
 define([
     'flight/lib/component',
+    './withReduxStore',
     './withPublicApi',
     './withBrokenWorkerConsole',
     './withDataRequestHandler',
@@ -13,17 +14,13 @@ define([
     './withObjectSelection',
     './withObjectsUpdated',
     './withClipboard',
-    './withWorkspaces',
-    './withWorkspaceFiltering',
-    './withWorkspaceVertexDrop'
+    './withWorkspaces'
 ], function(
-    defineComponent
-    // mixins auto added in order (change index of slice)
+    defineComponent,
+    ...mixins
 ) {
-    'use strict';
 
-    var PATH_TO_WORKER = 'jsc/data/web-worker/data-worker.js',
-        mixins = Array.prototype.slice.call(arguments, 1);
+    var PATH_TO_WORKER = 'jsc/data/web-worker/data-worker.js';
 
     return defineComponent.apply(null, [Data].concat(mixins));
 
@@ -72,8 +69,13 @@ define([
         };
 
         this.setupDataWorker = function() {
-            this.worker = new Worker(PATH_TO_WORKER + '?' + window.visalloCacheBreaker);
-            this.worker.postMessage(window.visalloCacheBreaker);
+            var self = this;
+
+            this.worker = new Worker(PATH_TO_WORKER + '?' + visalloCacheBreaker);
+            this.worker.postMessage(JSON.stringify({
+                cacheBreaker: visalloCacheBreaker,
+                webWorkerResources: visalloPluginResources.webWorker
+            }));
             this.worker.onmessage = this.onDataWorkerMessage.bind(this);
             this.worker.onerror = this.onDataWorkerError.bind(this);
         };

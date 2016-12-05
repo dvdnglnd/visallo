@@ -1,47 +1,19 @@
 /*globals module:false*/
+
+var requireConfig = require('./js/require.config');
+
 module.exports = function(grunt) {
     'use strict';
+
+    require('load-grunt-tasks')(grunt);
+    grunt.loadTasks('grunt-tasks');
 
     grunt.initConfig({
         pkg: grunt.file.readJSON('package.json'),
 
-        clean: ['jsc', 'css'],
-
-        bower: {
-          install: {
-              options: {
-                  targetDir: './libs',
-                  install: true,
-                  copy: false,
-                  quiet: true
-              }
-          },
-          prune: {
-              options: {
-                  targetDir: './libs',
-                  copy: false,
-                  offline: true,
-                  quiet: true
-              }
-          }
-        },
-
-        exec: {
-            buildOpenlayers: {
-                command: 'python build.py -c none full ../OpenLayers.debug.js',
-                stdout: false,
-                cwd: 'libs/openlayers/build'
-            },
-            buildPathFinding: {
-                command: 'npm install -q && make',
-                stdout: false,
-                cwd: 'libs/PathFinding.js'
-            },
-            buildAtmosphere: {
-                command: 'mvn clean package',
-                stdout: false,
-                cwd: 'libs/atmosphere-javascript/modules/javascript'
-            }
+        clean: {
+            src: ['jsc', 'css'],
+            libs: ['libs']
         },
 
         less: {
@@ -88,36 +60,56 @@ module.exports = function(grunt) {
             }
         },
 
-        requirejs: {
-            options: {
-                mainConfigFile: 'js/require.config.js',
-                dir: 'jsc',
-                baseUrl: 'js',
-                preserveLicenseComments: false,
-                removeCombined: false
-            },
-            development: {
+        babel: {
+            js: {
                 options: {
-                    logLevel: 2,
-                    optimize: 'none',
-                    keepBuildDir: true
-                }
-            },
-            production: {
+                    sourceMap: true
+                },
+                files: [
+                    { expand: true, cwd: 'js', src: ['**/*.js'], dest: 'jsc' },
+                    { expand: true, cwd: 'js', src: ['**/*.jsx'], dest: 'jsc', ext: '.js' }
+                ]
+            }
+        },
+
+        uglify: {
+            js: {
                 options: {
-                    logLevel: 0,
-                    optimize: 'uglify2',
-                    generateSourceMaps: true
-                }
+                    sourceMapIn: function(filename) {
+                        return filename + '.map'
+                    },
+                    sourceMap: true,
+                    sourceMapIncludeSources: true
+                },
+                files: [
+                    { expand: true, cwd: 'jsc', src: ['**/*.js'], dest: 'jsc/' },
+                ]
+            }
+        },
+
+        copy: {
+            templates: {
+                files: [
+                    {expand: true, cwd: 'js/', src: ['**/*.hbs', '**/*.ejs', '**/*.css'], dest: 'jsc'}
+                ],
+            },
+        },
+
+        amdwrap: {
+            wrapNodeModules: {
+                expand: true,
+                cwd: 'libs/',
+                src: requireConfig.amdWrap,
+                dest: 'libs/amd-wrap'
             }
         },
 
         eslint: {
             development: {
-                src: ['js/**/*.js', 'test/unit/**/*.js']
+                src: ['js/**/*.js', 'test/unit/**/*.js', 'js/**/*.jsx']
             },
             ci: {
-                src: 'js/**/*.js',
+                src: ['js/**/*.js', 'js/**/*.jsx'],
                 options: {
                     format: 'checkstyle',
                     outputFile: 'build/checkstyle.xml'
@@ -166,13 +158,15 @@ module.exports = function(grunt) {
             scripts: {
                 files: [
                     'js/**/*.js',
+                    'js/**/*.jsx',
                     'js/**/*.less',
+                    'js/**/*.css',
                     'js/**/*.ejs',
                     'js/**/*.hbs',
                     'js/**/*.vsh',
                     'js/**/*.fsh'
                 ],
-                tasks: ['requirejs:development', 'notify:js'],
+                tasks: ['babel:js', 'copy:templates', 'notify:js'],
                 options: {
                     livereload: {
                         port: 35729,
@@ -182,7 +176,7 @@ module.exports = function(grunt) {
                 }
             },
             lint: {
-                files: ['js/**/*.js', 'test/unit/**/*.js'],
+                files: ['js/**/*.js', 'js/**/*.jsx', 'test/unit/**/*.js'],
                 tasks: ['eslint:development']
             }
         },
@@ -191,7 +185,7 @@ module.exports = function(grunt) {
             js: {
                 options: {
                     title: 'Visallo',
-                    message: 'RequireJS finished'
+                    message: 'Scripts finished'
                 }
             },
             css: {
@@ -200,6 +194,9 @@ module.exports = function(grunt) {
                     message: 'Less finished'
                 }
             }
+        },
+
+        'copy-frontend': {
         },
 
         karma: {
@@ -230,27 +227,24 @@ module.exports = function(grunt) {
         }
       });
 
-      grunt.loadNpmTasks('grunt-bower-task');
-      grunt.loadNpmTasks('grunt-exec');
-      grunt.loadNpmTasks('grunt-contrib-clean');
-      grunt.loadNpmTasks('grunt-contrib-less');
-      grunt.loadNpmTasks('grunt-contrib-watch');
-      grunt.loadNpmTasks('grunt-contrib-requirejs');
-      grunt.loadNpmTasks('grunt-notify');
-      grunt.loadNpmTasks('grunt-karma');
-      grunt.loadNpmTasks('grunt-plato');
-      grunt.loadNpmTasks('grunt-eslint');
 
-      // Speed up lint by only checking changed files
+      // Speed up lint/babel by only checking changed files
       // ensure we still ignore files though
       var initialEslintSrc = grunt.config('eslint.development.src');
+      var initialBabelFiles = grunt.config('babel.js.files');
       grunt.event.on('watch', function(action, filepath) {
           var matchingEslint = grunt.file.match(initialEslintSrc, filepath);
           grunt.config('eslint.development.src', matchingEslint);
+
+          grunt.config('babel.js.files', initialBabelFiles.map(function(f) {
+              var filePathRelativeToCwd = filepath.replace(/^js\//, '')
+              var matchingBabelFiles = grunt.file.match(f, f.src, filePathRelativeToCwd);
+              return Object.assign({}, f, { src: matchingBabelFiles })
+          }));
       });
 
       grunt.registerTask('deps', 'Install Webapp Dependencies',
-         ['bower:install', 'bower:prune', 'exec']);
+         ['clean:libs', 'copy-frontend', 'amdwrap']);
 
       grunt.registerTask('test:unit', 'Run JavaScript Unit Tests',
          ['karma:unit']);
@@ -261,9 +255,9 @@ module.exports = function(grunt) {
          ['deps', 'test:style', 'karma:ci']);
 
       grunt.registerTask('development', 'Build js/less for development',
-         ['clean', 'eslint:development', 'less:development', 'less:developmentContrast', 'requirejs:development']);
+         ['clean:src', 'eslint:development', 'less:development', 'less:developmentContrast', 'babel:js', 'copy:templates']);
       grunt.registerTask('production', 'Build js/less for production',
-         ['clean', 'eslint:ci', 'less:production', 'less:productionContrast', 'requirejs:production']);
+         ['clean:src', 'eslint:ci', 'less:production', 'less:productionContrast', 'babel:js', 'copy:templates', 'uglify:js']);
 
       grunt.registerTask('default', ['development', 'watch']);
 };

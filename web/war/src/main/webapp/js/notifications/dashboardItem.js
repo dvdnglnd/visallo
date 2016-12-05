@@ -12,10 +12,11 @@ define([
 
         this.after('initialize', function() {
             Notifications.attachTo(this.node, {
-                allowDismiss: false,
+                allowSystemDismiss: false,
                 animated: false,
                 showUserDismissed: true
             });
+            this.$node.addClass('list');
         });
 
     }

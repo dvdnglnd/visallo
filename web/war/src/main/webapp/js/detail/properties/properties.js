@@ -25,7 +25,7 @@ define([
         NO_GROUP = '${NO_GROUP}',
 
         // Property td types
-        GROUP = 0, NAME = 1, VALUE = 2,
+        GROUP = 0, NAME = 1, VALUE = 2, HIDDEN_COLLAPSE = 3,
 
         alreadyWarnedAboutMissingOntology = {};
 
@@ -74,7 +74,7 @@ define([
                 .call(
                     _.partial(
                         createPropertyGroups,
-                        self.attr.data,
+                        self.data,
                         self.ontologyProperties,
                         self.showMoreExpanded,
                         parseInt(self.config['properties.multivalue.defaultVisibleCount'], 10),
@@ -86,25 +86,14 @@ define([
 
         this.transformPropertiesForUpdate = function(properties) {
             var self = this,
-                model = self.attr.data,
+                model = self.data,
                 isEdge = F.vertex.isEdge(model),
                 dependentPropertyIris = this.dependentPropertyIris,
                 compoundPropertiesByNameToKeys = {},
                 displayProperties = _.chain(properties)
                     .filter(function(property) {
-                        if (isEdge && isJustification(property)) {
-                            $.extend(property, {
-                                hideInfo: true,
-                                hideVisibility: true,
-                                displayName: i18n('justification.field.label'),
-                                justificationData: {
-                                    justificationMetadata: property.name === 'http://visallo.org#justification' ?
-                                        property.value : null,
-                                    sourceMetadata: property.name === '_sourceMetadata' ?
-                                        property.value : null
-                                }
-                            });
-                            return true;
+                        if (isJustification(property)) {
+                            return false;
                         }
 
                         if (isVisibility(property)) {
@@ -112,6 +101,10 @@ define([
                         }
 
                         if (~HIDE_PROPERTIES.indexOf(property.name)) {
+                            return false;
+                        }
+
+                        if (property.streamingPropertyValue) {
                             return false;
                         }
 
@@ -139,11 +132,11 @@ define([
                         if (!visibility) {
                             properties.push({
                                 name: VISIBILITY_NAME,
-                                value: self.attr.data[VISIBILITY_NAME]
+                                value: self.data[VISIBILITY_NAME]
                             });
                         }
 
-                        var sandboxStatus = F.vertex.sandboxStatus(self.attr.data);
+                        var sandboxStatus = F.vertex.sandboxStatus(self.data);
                         if (sandboxStatus) {
                             properties.push({
                                 name: SANDBOX_STATUS_NAME,
@@ -158,7 +151,7 @@ define([
                         // dependent properties have multiple keys
                         _.each(compoundPropertiesByNameToKeys, function(compoundInfo, compoundKey) {
                             _.each(compoundInfo.keys, function(value, key) {
-                                var matching = F.vertex.props(self.attr.data, compoundInfo.property.title, key),
+                                var matching = F.vertex.props(self.data, compoundInfo.property.title, key),
                                     first = matching && _.first(matching),
                                     property = {
                                         compoundProperty: true,
@@ -174,19 +167,6 @@ define([
                                 properties.push(property);
                             });
                         });
-
-                        if (isEdge && model.label) {
-                            var ontologyRelationship = self.ontologyRelationships.byTitle[model.label];
-                            properties.push({
-                                name: RELATIONSHIP_LABEL,
-                                displayName: i18n('detail.edge.type'),
-                                hideInfo: true,
-                                hideVisibility: true,
-                                value: ontologyRelationship ?
-                                    ontologyRelationship.displayName :
-                                    model.label
-                            });
-                        }
                     })
                     .sortBy(function(property) {
                         var value = F.vertex.prop(model, property.name, property.key);
@@ -243,10 +223,14 @@ define([
         };
 
         this.after('initialize', function() {
+            this.data = this.attr.data;
+
             var self = this,
-                properties = this.attr.data.properties,
+                properties = this.data.properties,
                 node = this.node,
                 root = d3.select(node);
+
+            node.classList.add('org-visallo-properties');
 
             this.showMoreExpanded = {};
             this.tableRoot = root
@@ -256,7 +240,7 @@ define([
 
             var ontologyLoaded = Promise.all([
                 this.dataRequest('ontology', 'ontology'),
-                this.dataRequest('ontology', 'propertiesByConceptId', F.vertex.prop(self.attr.data, 'conceptType')),
+                this.dataRequest('ontology', 'propertiesByConceptId', F.vertex.prop(self.data, 'conceptType')),
                 this.dataRequest('config', 'properties')
             ]).then(function(results) {
                 var ontology = results.shift(),
@@ -290,14 +274,10 @@ define([
             this.on('addProperty', this.onAddProperty);
             this.on('deleteProperty', this.onDeleteProperty);
             this.on('editProperty', this.onEditProperty);
-            this.on(document, 'verticesUpdated', function(e, d) {
+            this.on('updateModel', function(event, data) {
+                self.data = data.model;
                 ontologyLoaded.done(function() {
-                    self.onVerticesUpdated(e, d);
-                })
-            });
-            this.on(document, 'edgesUpdated', function(e, d) {
-                ontologyLoaded.done(function() {
-                    self.onEdgesUpdated(e, d);
+                    self.update(data.model.properties)
                 })
             });
 
@@ -312,66 +292,54 @@ define([
             }
         });
 
-        this.onEdgesUpdated = function(event, data) {
-            var edge = _.findWhere(data.edges, { id: this.attr.data.id });
-            if (edge) {
-                this.attr.data = edge;
-                this.update(edge.properties);
-            }
-        };
-
-        this.onVerticesUpdated = function(event, data) {
-            var vertex = _.findWhere(data.vertices, { id: this.attr.data.id });
-            if (vertex) {
-                this.attr.data = vertex;
-                this.update(vertex.properties)
-            }
-        };
-
         this.onDeleteProperty = function(event, data) {
             var self = this,
-                vertexId = data.vertexId || this.attr.data.id;
+                vertexId = data.vertexId || this.data.id;
 
             this.dataRequest(
-                    F.vertex.isEdge(this.attr.data) ? 'edge' : 'vertex',
+                    F.vertex.isEdge(this.data) ? 'edge' : 'vertex',
                     'deleteProperty',
                     vertexId, data.property
-                ).then(this.closePropertyForm.bind(this))
-                 .catch(this.requestFailure.bind(this, event.target))
+                ).then(this.closePropertyForm.bind(this, data.node))
+                 .catch(function(error) { self.requestFailure.call(self, error, data.node) })
         };
 
         this.onAddProperty = function(event, data) {
-            var vertexId = data.vertexId || this.attr.data.id;
+            var self = this,
+                vertexId = data.vertexId || this.data.id,
+                service = data.isEdge ? 'edge' : 'vertex';
 
             if (data.property.name === 'http://visallo.org#visibilityJson') {
                 var visibilitySource = data.property.visibilitySource || '';
-                if (data.isEdge) {
-                    this.dataRequest('edge', 'setVisibility', vertexId, visibilitySource)
-                        .then(this.closePropertyForm.bind(this))
-                        .catch(this.requestFailure.bind(this))
-                } else {
-                    this.dataRequest('vertex', 'setVisibility', vertexId, visibilitySource)
-                        .then(this.closePropertyForm.bind(this))
-                        .catch(this.requestFailure.bind(this));
-                }
+                this.dataRequest(service, 'setVisibility', vertexId, visibilitySource)
+                    .then(this.closePropertyForm.bind(this, data.node))
+                    .catch(function(error) { self.requestFailure.call(self, error, data.node) })
+            } else if (this.isStreamingPropertyVisibilityUpdate(data)) {
+                this.dataRequest(service, 'setPropertyVisibility', vertexId, data.property)
+                    .then(this.closePropertyForm.bind(this, data.node))
+                    .catch(function(error) { self.requestFailure.call(self, error, data.node) });
             } else {
-                this.dataRequest(
-                    data.isEdge ? 'edge' : 'vertex',
-                    'setProperty',
-                    vertexId,
-                    data.property)
-                    .then(this.closePropertyForm.bind(this))
-                    .catch(this.requestFailure.bind(this));
+                this.dataRequest(service, 'setProperty', vertexId, data.property)
+                    .then(this.closePropertyForm.bind(this, data.node))
+                    .catch(function(error) { self.requestFailure.call(self, error, data.node) });
             }
 
         };
 
-        this.closePropertyForm = function() {
-            this.$node.closest('.type-content').find('.underneath').teardownComponent(PropertyForm);
+        this.isStreamingPropertyVisibilityUpdate = function(data) {
+            if (!_.isUndefined(data.property.key)) {
+                var prop = _.first(F.vertex.props(this.data, data.property.name, data.property.key));
+                return prop && prop.streamingPropertyValue;
+            }
+            return false;
         };
 
-        this.requestFailure = function(error) {
-            var target = this.$node.closest('.type-content').find('.underneath');
+        this.closePropertyForm = function(node) {
+            $(node).teardownComponent(PropertyForm);
+        };
+
+        this.requestFailure = function(error, node) {
+            var target = $(node);
             this.trigger(target, 'propertyerror', { error: error });
         };
 
@@ -394,7 +362,7 @@ define([
 
             PropertyForm.teardownAll();
             PropertyForm.attachTo(root, {
-                data: this.attr.data,
+                data: this.data,
                 property: property
             });
         };
@@ -476,7 +444,7 @@ define([
             this.reload();
         } else if ($target.is('.info')) {
             var datum = d3.select($target.closest('.property-value').get(0)).datum();
-            this.showPropertyInfo($target, this.attr.data, datum.property);
+            this.showPropertyInfo($target, this.data, datum.property);
         } else {
             processed = false;
         }
@@ -489,21 +457,21 @@ define([
 
     function createPropertyGroups(vertex, ontologyProperties, showMoreExpanded, maxItemsBeforeHidden, expandedSections,
                                   config) {
-        this.enter()
-            .insert('tbody', '.buttons-row')
-            .attr('class', function(d, groupIndex, j) {
-                var cls = 'property-group collapsible';
-                if (groupIndex === 0) {
-                    return cls + ' expanded';
-                }
-
-                return cls + ' ' + (
-                    _.contains(expandedSections, d[0]) ?
-                        'expanded' : 'collapsed'
-                );
-            });
-
+        this.exit().remove();
+        this.enter().insert('tbody', '.buttons-row');
         this.order();
+
+        this.attr('class', function(d, groupIndex, j) {
+            var cls = 'property-group collapsible';
+            if (groupIndex === 0) {
+                return cls + ' expanded';
+            }
+
+            return cls + ' ' + (
+                _.contains(expandedSections, d[0]) ?
+                    'expanded' : 'collapsed'
+            );
+        });
 
         this.attr('data-section-name', function(d) {
             return d[0];
@@ -511,15 +479,22 @@ define([
 
         var totalPropertyCountsByName = {};
 
-        this.selectAll('tr.property-group-header, tr.property-row')
+        this.selectAll('tr.property-group-header, tr.property-row, tr.property-hidden')
             .data(function(pair) {
                 return _.chain(pair[1])
                     .map(function(p) {
-                        totalPropertyCountsByName[p[0]] = p[1].length - maxItemsBeforeHidden;
+                        var hidden = p[1].length - maxItemsBeforeHidden;
+                        totalPropertyCountsByName[p[0]] = hidden;
                         if (p[0] in showMoreExpanded) {
-                            return p[1];
+                            var expanded = p[1].slice(0);
+                            expanded.splice(maxItemsBeforeHidden, 0, { name: p[0], hidden: hidden, isExpanded: true });
+                            return expanded;
                         }
-                        return p[1].slice(0, maxItemsBeforeHidden);
+                        var truncated = p[1].slice(0, maxItemsBeforeHidden);
+                        if (hidden > 0) {
+                            truncated.push({ name: p[0], hidden: hidden, isExpanded: false });
+                        }
+                        return truncated;
                     })
                     .flatten()
                     .tap(function(list) {
@@ -544,8 +519,6 @@ define([
                           config
                 )
             )
-
-        this.exit().remove();
     }
 
     function createProperties(vertex,
@@ -555,16 +528,20 @@ define([
                               showMoreExpanded,
                               config) {
 
-        this.enter()
-            .append('tr')
-            .attr('class', function(datum) {
-                if (_.isString(datum[0])) {
-                    return 'property-group-header';
-                }
-                return 'property-row property-row-' + F.className.to(datum.name + datum.key);
-            });
 
+        this.exit().remove();
+        this.enter().append('tr')
         this.order();
+
+        this.attr('class', function(datum) {
+            if (_.isString(datum[0])) {
+                return 'property-group-header';
+            }
+            if ('hidden' in datum) {
+                return 'property-hidden';
+            }
+            return 'property-row property-row-' + F.className.to(datum.name + datum.key);
+        });
 
         var currentPropertyIndex = 0,
             lastPropertyName = '';
@@ -577,6 +554,12 @@ define([
                         name: datum[0],
                         count: datum[1]
                     }];
+                }
+                if ('hidden' in datum) {
+                    return [
+                        { type: HIDDEN_COLLAPSE, spacer: true },
+                        { type: HIDDEN_COLLAPSE, name: datum.name, hidden: datum.hidden, isExpanded: datum.isExpanded }
+                    ];
                 }
 
                 if (datum.name === lastPropertyName) {
@@ -603,35 +586,53 @@ define([
                 ];
             })
             .call(_.partial(createPropertyRow, vertex, ontologyProperties, maxItemsBeforeHidden, config));
-
-        this.exit().remove();
     }
 
     function createPropertyRow(vertex, ontologyProperties, maxItemsBeforeHidden, config) {
-        this.enter()
-            .append('td')
-            .each(function(datum) {
-                var d3element = d3.select(this);
-                switch (datum.type) {
-                    case GROUP:
-                        d3element.append('h1')
-                            .attr('class', 'collapsible-header')
-                            .call(function() {
-                                this.append('span').attr('class', 'badge');
-                                this.append('strong');
-                            });
-                            break;
-                    case NAME: d3element.append('strong'); break;
-                    case VALUE:
-                        d3element.append('span').attr('class', 'value');
-                        d3element.append('button').attr('class', 'info')
-                        d3element.append('span').attr('class', 'visibility');
-                        if (datum.propertyIndex === (maxItemsBeforeHidden - 1)) {
-                            d3element.append('a').attr('class', 'show-more');
-                        }
+        this.exit().remove();
+        this.each(function(datum) {
+            var d3element = d3.select(this),
+                resetUnless = function(selector) {
+                    if (d3element.select(selector).size() === 0) {
+                        d3element.text('');
+                    }
+                };
+            switch (datum.type) {
+                case HIDDEN_COLLAPSE: resetUnless('a.show-more'); break;
+                case GROUP: resetUnless('.collapsible-header'); break;
+                case NAME: resetUnless('strong'); break;
+                case VALUE: resetUnless('.value-container'); break;
+            }
+        })
+        this.enter().append('td')
+        this.each(function(datum) {
+            if (this.childElementCount > 0) return;
+            var d3element = d3.select(this);
+            switch (datum.type) {
+                case HIDDEN_COLLAPSE:
+                    if (!datum.spacer) {
+                        d3element.append('a').attr('class', 'show-more');
+                    }
+                    break;
+                case GROUP:
+                    d3element.append('h1')
+                        .attr('class', 'collapsible-header')
+                        .call(function() {
+                            this.append('span').attr('class', 'badge');
+                            this.append('strong');
+                        });
                         break;
-                }
-            });
+                case NAME: d3element.append('strong'); break;
+                case VALUE:
+                    d3element.append('div').attr('class', 'value-container')
+                        .call(function() {
+                            this.append('span').attr('class', 'value');
+                            this.append('button').attr('class', 'info');
+                            this.append('span').attr('class', 'visibility');
+                        })
+                    break;
+            }
+        });
 
         this.order();
 
@@ -640,17 +641,14 @@ define([
                     return 'property-name';
                 } else if (datum.type === VALUE) {
                     return 'property-value';
-                }
-            })
-            .attr('width', function(datum) {
-                if (datum.type === NAME) {
-                    return '40%';
+                } else if (datum.type === HIDDEN_COLLAPSE && !datum.spacer) {
+                    return 'property-hidden-toggle'
                 }
             })
             .attr('colspan', function(datum) {
                 if (datum.type === GROUP) {
                     return '3';
-                } else if (datum.type === VALUE) {
+                } else if (datum.type === VALUE || (datum.type === HIDDEN_COLLAPSE && !datum.spacer)) {
                     return '2';
                 }
                 return '1';
@@ -661,10 +659,7 @@ define([
                 this.select('h1.collapsible-header strong').text(_.property('name'))
                 this.select('h1.collapsible-header .badge')
                     .text(function(d) {
-                        return i18n('properties.groups.count',
-                            F.number.pretty(d.count.propertyCount),
-                            F.number.pretty(d.count.valueCount)
-                        );
+                        return F.number.pretty(d.count.valueCount)
                     })
                     .attr('title', function(d) {
                         var propertyLabel = 'properties.groups.count.hover.property',
@@ -727,7 +722,7 @@ define([
 
                         if (visibility) {
                             dataType = 'visibility';
-                        } else if (property.hideVisibility !== true) {
+                        } else if (config['showVisibilityInDetailsPane'] !== 'false' && property.hideVisibility !== true) {
                             F.vertex.properties.visibility(
                                 visibilitySpan,
                                 { value: property.metadata && property.metadata[VISIBILITY_NAME] },
@@ -764,27 +759,25 @@ define([
                         }
                     });
 
-                this.select('.property-value .show-more')
+                this.select('.show-more')
                     .attr('data-property-name', function(d) {
-                        return d.property.name;
+                        return d.name;
                     })
                     .text(function(d) {
                         return i18n(
                             'properties.button.' + (d.isExpanded ? 'hide_more' : 'show_more'),
                             F.number.pretty(d.hidden),
-                            ontologyProperties.byTitle[d.property.name].displayName
+                            ontologyProperties.byTitle[d.name].displayName
                         );
                     })
                     .style('display', function(d) {
-                        if (d.showToggleLink && d.hidden > 0) {
+                        if (d.hidden > 0) {
                             return 'block';
                         }
 
                         return 'none';
                     });
             })
-
-        this.exit().remove();
     }
 
 });

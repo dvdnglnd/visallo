@@ -1,10 +1,10 @@
 define([
     'flight/lib/component',
-    'fields/selection/selection',
+    'util/ontology/propertySelect',
     'hbs!./sortTpl',
     'util/requirejs/promise!util/service/ontologyPromise',
     'd3',
-    'jquery-ui/sortable'
+    'jquery-ui'
 ], function(
     defineComponent,
     FieldSelection,
@@ -51,7 +51,9 @@ define([
             if (!data || _.isEmpty(data.properties)) {
                 this.filteredProperties = null;
             } else {
-                this.filteredProperties = data.properties;
+                this.filteredProperties = _.reject(data.properties, function(p) {
+                    return p.sortable === false;
+                });
             }
 
             this.$node.find('.property-select').trigger(event.type, {
@@ -91,7 +93,7 @@ define([
             node.teardownComponent(FieldSelection);
             FieldSelection.attachTo(node, {
                 properties: _.reject(this.filteredProperties || ontologyPromise.properties.list, function(p) {
-                    return p.searchable === false;
+                    return p.searchable === false || p.sortable === false;
                 }),
                 onlySearchable: true,
                 placeholder: 'Add Sort...'
@@ -101,11 +103,17 @@ define([
         this.onPropertySelected = function(event, data) {
             event.stopPropagation();
             this.attachPropertyField();
-            this.sortFields.push({
-                field: data.property.title,
-                direction: 'ASCENDING'
+
+            var hasSort = _.some(this.sortFields, function(sort) {
+                return sort.field === data.property.title;
             });
-            this.updateSortFields();
+            if (!hasSort) {
+                this.sortFields.push({
+                    field: data.property.title,
+                    direction: 'ASCENDING'
+                });
+                this.updateSortFields();
+            }
         };
 
         this.updateSortFields = function(preventTrigger) {

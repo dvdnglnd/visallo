@@ -7,33 +7,61 @@
 /*global importScripts:false*/
 
 /*eslint strict:0*/
+this.importScripts('../../../libs/babel-polyfill/dist/polyfill.min.js');
+
 var BASE_URL = '../../..',
     self = this,
-    cacheBreaker = null,
+    needsInitialSetup = true,
     publicData = {};
 
+var timer, todo = [], setupInProgress = true;
 onmessage = function(event) {
-    if (!cacheBreaker) {
-        cacheBreaker = event.data;
-        setupAll();
+    if (needsInitialSetup) {
+        todo = [];
+        needsInitialSetup = false;
+        setupInProgress = true;
+        setupAll(JSON.parse(event.data));
+        return;
+    }
+
+    if (setupInProgress) {
+        todo.push(event);
         return;
     }
 
     require([
         'underscore',
-        'util/promise',
-        'data/web-worker/util/store'
-    ], function(_, Promise, store) {
-        self.store = store;
+        'util/promise'
+    ], function(_, Promise) {
         onMessageHandler(event);
     })
 };
 
-function setupAll() {
+function setupComplete() {
+    setupInProgress = false;
+    todo.forEach(event => onmessage(event));
+}
+
+function setupAll(data) {
     setupConsole();
-    setupWebsocket();
-    setupRequireJs();
-    documentExtensionPoints();
+    setupWebsocket(data);
+    setupRequireJs(data, () => {
+        documentExtensionPoints();
+        setupRedux(data);
+        setupComplete();
+    });
+}
+
+function setupRedux(data) {
+    require(['data/web-worker/store'], function(store) {
+        try {
+            var state = store.getStore().getState()
+            dispatchMain('reduxStoreInit', { state });
+        } catch(e) {
+            console.error(e)
+            throw e;
+        }
+    });
 }
 
 function setupConsole() {
@@ -63,13 +91,13 @@ function setupConsole() {
     }
 }
 
-function setupWebsocket() {
+function setupWebsocket(data) {
     var isFirefox = navigator && navigator.userAgent && ~navigator.userAgent.indexOf('Firefox'),
         supportedInWorker = !!(this.WebSocket || this.MozWebSocket) && !isFirefox;
 
     if (supportedInWorker) {
         self.window = self;
-        importScripts(BASE_URL + '/libs/atmosphere-javascript/modules/javascript/target/javascript-2.2.11/javascript/atmosphere-min.js?' + cacheBreaker);
+        importScripts(BASE_URL + '/libs/atmosphere.js/lib/atmosphere.js?' + data.cacheBreaker);
         atmosphere.util.getAbsoluteURL = function() {
             return publicData.atmosphereConfiguration.url;
         }
@@ -106,18 +134,19 @@ function setupWebsocket() {
     }
 }
 
-function setupRequireJs() {
+function setupRequireJs(data, callback) {
     if (typeof File === 'undefined') {
         self.File = Blob;
     }
     if (typeof FormData === 'undefined') {
-        importScripts('./util/formDataPolyfill.js?' + cacheBreaker);
+        importScripts('./util/formDataPolyfill.js?' + data.cacheBreaker);
     }
-    importScripts(BASE_URL + '/jsc/require.config.js?' + cacheBreaker);
+    importScripts(BASE_URL + '/jsc/require.config.js?' + data.cacheBreaker);
     require.baseUrl = BASE_URL + '/jsc/';
-    require.urlArgs = cacheBreaker;
-    require.deps = ['../plugins-web-worker'];
-    importScripts(BASE_URL + '/libs/requirejs/require.js?' + cacheBreaker);
+    require.urlArgs = data.cacheBreaker;
+    require.deps = data.webWorkerResources;
+    require.callback = callback;
+    importScripts(BASE_URL + '/libs/requirejs/require.js?' + data.cacheBreaker);
 }
 
 function onMessageHandler(event) {
@@ -192,6 +221,7 @@ function ajaxPrefilter(xmlHttpRequest, method, url, parameters) {
         var filters = [
                 setWorkspaceHeader,
                 setCsrfHeader,
+                setSourceGuidHeader,
                 setGraphTracing
                 // TODO: set timezone
             ], invoke = function(f) {
@@ -216,24 +246,17 @@ function ajaxPrefilter(xmlHttpRequest, method, url, parameters) {
             xmlHttpRequest.setRequestHeader('Visallo-CSRF-Token', token);
         }
     }
+    function setSourceGuidHeader() {
+        var isUpdate = !(/get/i).test(method),
+            guid = publicData.socketSourceGuid;
+
+        if (isUpdate && guid) {
+            xmlHttpRequest.setRequestHeader('Visallo-Source-Guid', guid);
+        }
+    }
     function setGraphTracing() {
         if (publicData.graphTraceEnable) {
             xmlHttpRequest.setRequestHeader('graphTraceEnable', 'true');
         }
     }
-}
-
-function ajaxPostfilter(xmlHttpRequest, jsonResponse, request) {
-    if (!jsonResponse) {
-        return;
-    }
-
-    var params = request.parameters,
-        workspaceId = params && params.workspaceId;
-
-    if (!workspaceId) {
-        workspaceId = publicData.currentWorkspaceId;
-    }
-
-    store.checkAjaxForPossibleCaching(xmlHttpRequest, jsonResponse, workspaceId, request);
 }

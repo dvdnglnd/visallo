@@ -6,15 +6,15 @@ import com.v5analytics.webster.annotations.Handle;
 import com.v5analytics.webster.annotations.Required;
 import org.json.JSONObject;
 import org.visallo.core.exception.VisalloAccessDeniedException;
+import org.visallo.core.model.user.UserNameAuthorizationContext;
 import org.visallo.core.model.user.UserRepository;
 import org.visallo.core.user.User;
-import org.visallo.web.AuthenticationHandler;
 import org.visallo.web.CurrentUser;
+import org.visallo.web.util.RemoteAddressUtil;
 
 import javax.servlet.http.HttpServletRequest;
 
 public class Login implements ParameterizedHandler {
-
     private final UserRepository userRepository;
 
     @Inject
@@ -33,7 +33,11 @@ public class Login implements ParameterizedHandler {
 
         User user = userRepository.findByUsername(username);
         if (user != null && userRepository.isPasswordValid(user, password)) {
-            userRepository.recordLogin(user, AuthenticationHandler.getRemoteAddr(request));
+            UserNameAuthorizationContext authorizationContext = new UserNameAuthorizationContext(
+                    username,
+                    RemoteAddressUtil.getClientIpAddr(request)
+            );
+            userRepository.updateUser(user, authorizationContext);
             CurrentUser.set(request, user.getUserId(), user.getUsername());
             JSONObject json = new JSONObject();
             json.put("status", "OK");

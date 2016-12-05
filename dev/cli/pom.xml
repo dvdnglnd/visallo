@@ -5,7 +5,7 @@
     <parent>
         <artifactId>visallo-dev</artifactId>
         <groupId>org.visallo</groupId>
-        <version>1.1-SNAPSHOT</version>
+        <version>3.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -16,75 +16,6 @@
         <dependency>
             <groupId>org.visallo</groupId>
             <artifactId>visallo-cli</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-flight-aware</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-the-movie-db-download</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-twitter-ingestion</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-model-queue-rabbitmq</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-model-vertexium</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-model-vertexium-accumulo</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-ontology-acl-provider</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-model-vertexium-elasticsearch</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-model-vertexium-inmemory</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.vertexium</groupId>
-            <artifactId>vertexium-accumulo</artifactId>
-            <version>${vertexium.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.vertexium</groupId>
-            <artifactId>vertexium-elasticsearch-singledocument</artifactId>
-            <version>${vertexium.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.vertexium</groupId>
-            <artifactId>vertexium-kryo-serializer</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.v5analytics.simpleorm</groupId>
-            <artifactId>simple-orm-accumulo</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-geocoder-bing</artifactId>
             <version>${project.version}</version>
         </dependency>
     </dependencies>

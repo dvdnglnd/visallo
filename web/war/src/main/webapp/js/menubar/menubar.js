@@ -3,31 +3,37 @@ define([
     'flight/lib/component',
     'configuration/plugins/registry',
     './activity/activity',
-    'tpl!./menubar'
-], function(defineComponent, registry, Activity, template) {
+    'tpl!./menubar',
+    'admin/admin'
+], function(defineComponent, registry, Activity, template, AdminList) {
     'use strict';
 
     // Add class name of <li> buttons here
-    var BUTTONS = 'dashboard graph map search workspaces admin activity logout'.split(' '),
+    var BUTTONS = 'dashboard search workspaces products admin activity logout'.split(' '),
+        PANE_AUXILIARY = {
+            products: { name: 'products-full', action: { type: 'full', componentPath: 'product/ProductDetailContainer' } }
+        },
         TOOLTIPS = {
+            activity: i18n('menubar.icons.activity.tooltip'),
             dashboard: i18n('menubar.icons.dashboard.tooltip'),
-            graph: i18n('menubar.icons.graph'),
-            map: i18n('menubar.icons.map.tooltip'),
             search: i18n('menubar.icons.search.tooltip'),
             workspaces: i18n('menubar.icons.workspaces.tooltip'),
+            products: i18n('menubar.icons.products.tooltip'),
             admin: i18n('menubar.icons.admin.tooltip'),
             logout: i18n('menubar.icons.logout.tooltip')
         },
 
         // Which cannot both be active
         MUTALLY_EXCLUSIVE_SWITCHES = [
-            { names: ['dashboard', 'graph', 'map'], options: { allowCollapse: false } },
-            { names: ['workspaces', 'search', 'admin'], options: { } }
+            { names: ['dashboard', 'products'], options: {} },
+            { names: ['dashboard', 'products-full'], options: { allowCollapse: false } },
+            { names: ['workspaces', 'search', 'admin', 'products'], options: { } }
         ],
 
         ACTION_TYPES = {
-            full: MUTALLY_EXCLUSIVE_SWITCHES[0],
-            pane: MUTALLY_EXCLUSIVE_SWITCHES[1]
+            full: MUTALLY_EXCLUSIVE_SWITCHES[1],
+            pane: MUTALLY_EXCLUSIVE_SWITCHES[2],
+            url: { names: [], options: {}}
         },
 
         // Don't change state to highlighted on click
@@ -48,12 +54,18 @@ define([
             e.preventDefault();
 
             var self = this,
-                isSwitch = false;
+                isSwitch = false,
+                type = 'pane';
 
             if (DISABLE_ACTIVE_SWITCH.indexOf(name) === -1) {
                 MUTALLY_EXCLUSIVE_SWITCHES.forEach(function(exclusive, i) {
-                    if (exclusive.names.indexOf(name) !== -1 && exclusive.options.allowCollapse === false) {
-                        isSwitch = true;
+                    if (exclusive.names.indexOf(name) !== -1) {
+                        if (exclusive.options.allowCollapse === false) {
+                            isSwitch = true;
+                        }
+                        if (i === 0) {
+                            type = 'full';
+                        }
                     }
                 });
             }
@@ -61,6 +73,7 @@ define([
             if (!_.contains(DISABLE_HIDE_TOOLTIP_ON_CLICK, name)) {
                 icon.tooltip('hide');
             }
+
             if (isSwitch && icon.hasClass('active')) {
                 icon.toggleClass('toggled');
             } else {
@@ -69,10 +82,32 @@ define([
                     if (name in self.extensions) {
                         data.action = self.extensions[name].action;
                     }
-                    self.trigger(document, 'menubarToggleDisplay', data);
+                    if (data.action && data.action.type === 'url') {
+                        flashIcon(icon);
+                        window.open(data.action.url);
+                    } else {
+                        var aux = PANE_AUXILIARY[name];
+                        if (aux) {
+                            if (!icon.hasClass('active-aux') && icon.hasClass('only-open-auxiliary')) {
+                                self.trigger(document, 'menubarToggleDisplay', {
+                                    name: aux.name, action: aux.action
+                                });
+                                return;
+                            }
+                            icon.toggleClass('only-open-auxiliary', icon.hasClass('active'));
+                        }
+                        self.trigger(document, 'menubarToggleDisplay', data);
+                    }
                 });
             }
         };
+    }
+
+    function flashIcon(icon) {
+        icon.addClass('active');
+        _.delay(function() {
+            icon.removeClass('active');
+        }, 200);
     }
 
     function Menubar() {
@@ -97,7 +132,8 @@ define([
                     ('identifier' in e) &&
                     ('action' in e) &&
                     ('icon' in e);
-            }
+            },
+            'http://docs.visallo.org/extension-points/front-end/menubar'
         );
         registry.extensionsForPoint('org.visallo.menubar')
             .forEach(function(data) {
@@ -118,9 +154,8 @@ define([
 
         this.after('initialize', function() {
             var self = this;
-
             this.$node.html(template({
-                isAdmin: visalloData.currentUser.privilegesHelper.ADMIN
+                isAdmin: AdminList.getExtensions().length > 0
             }));
             this.extensions = extensions;
 
@@ -142,6 +177,24 @@ define([
             this.on('click', events);
 
             Activity.attachTo(this.select('activityIconSelector'));
+
+            this.on('dragenter', {
+                productsIconSelector: function(event) {
+                    if (!this.select('productsIconSelector').hasClass('active')) {
+                        this.trigger('menubarToggleDisplay', { name: 'products' });
+                    }
+                }
+            })
+            $(document).on('dragstart', function(event) {
+                const dataTransfer = event.originalEvent.dataTransfer;
+                if (!$('.products-pane.visible').length) {
+                    if (_.any(dataTransfer.types, type => type === VISALLO_MIMETYPES.ELEMENTS)) {
+                        const cls = 'hint-drop-normal';
+                        const node = $('.menubar-pane .products a').addClass(cls);
+                        _.delay(() => node.removeClass(cls), 1000)
+                    }
+                }
+            })
 
             this.on(document, 'menubarToggleDisplay', this.onMenubarToggle);
             this.on(document, 'graphPaddingUpdated', this.onGraphPaddingUpdated);
@@ -180,7 +233,7 @@ define([
                         if (_.contains(vals, e1.identifier)) return 1;
                         if (_.contains(vals, e2.identifier)) return -1;
                         return 0;
-                    })
+                    });
 
             _.each(sorted, function(item) {
                 var cls = item.identifier,
@@ -219,7 +272,7 @@ define([
 
                 newItem.insertBefore(container.find('.divider:last-child'));
             })
-        }
+        };
 
         this.onGraphPaddingUpdated = function(event, data) {
             var len = this.$node.find('a').length,
@@ -232,33 +285,62 @@ define([
 
         this.onMenubarToggle = function(e, data) {
             var self = this,
-                icon = this.select(data.name + 'IconSelector'),
-                active = icon.hasClass('active');
+                auxName = data && _.findKey(PANE_AUXILIARY, a => a.name === data.name),
+                isAux = Boolean(auxName),
+                name = data && auxName || data.name,
+                icon = this.select(name + 'IconSelector'),
+                active = isAux ? icon.hasClass('active-aux') : icon.hasClass('active');
 
-            if (DISABLE_ACTIVE_SWITCH.indexOf(data.name) === -1) {
+            if (DISABLE_ACTIVE_SWITCH.indexOf(name) === -1) {
                 var isSwitch = false;
 
                 if (!active) {
                     MUTALLY_EXCLUSIVE_SWITCHES.forEach(function(exclusive, i) {
                         if (exclusive.names.indexOf(data.name) !== -1) {
                             isSwitch = true;
-                                exclusive.names.forEach(function(name) {
-                                    if (name !== data.name) {
-                                        var otherIcon = self.select(name + 'IconSelector');
-                                        if (otherIcon.hasClass('active')) {
-                                            self.trigger(document, 'menubarToggleDisplay', {
-                                                name: name,
-                                                isSwitchButCollapse: true
-                                            });
+                            exclusive.names.forEach(function(exclusiveName) {
+                                if (exclusiveName !== data.name) {
+                                    var otherIcon = self.select(exclusiveName + 'IconSelector');
+                                    var otherIsActive = false;
+                                    if (otherIcon.length) {
+                                        otherIsActive = otherIcon.hasClass('active');
+                                    } else {
+                                        var auxName = _.findKey(PANE_AUXILIARY, a => a.name === exclusiveName);
+                                        if (auxName) {
+                                            otherIcon = self.select(auxName + 'IconSelector');
+                                            otherIsActive = otherIcon.hasClass('active-aux');
                                         }
-                                    } else icon.addClass('active');
-                                });
+                                    }
+                                    if (otherIsActive) {
+                                        self.trigger(document, 'menubarToggleDisplay', {
+                                            name: exclusiveName,
+                                            isSwitchButCollapse: true
+                                        });
+                                    }
+                                } else {
+                                    if (isAux) {
+                                        icon.addClass('active-aux');
+                                    } else {
+                                        icon.addClass('active');
+                                    }
+                                }
+                            });
                         }
                     });
                 }
 
                 if (!isSwitch || data.isSwitchButCollapse) {
-                    icon.toggleClass('active');
+                    icon.toggleClass(isAux ? 'active-aux' : 'active');
+                }
+
+                if (data && !isAux) {
+                    var aux = PANE_AUXILIARY[data.name];
+                    if (aux) {
+                        active = icon.hasClass('active');
+                        if (active && !icon.hasClass('active-aux')) {
+                            this.trigger(document, 'menubarToggleDisplay', { name: aux.name, action: aux.action });
+                        }
+                    }
                 }
 
             } else {

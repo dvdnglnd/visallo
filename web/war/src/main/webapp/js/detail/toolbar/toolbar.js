@@ -1,17 +1,33 @@
 define([
     'flight/lib/component',
     'hbs!./template',
-    'configuration/plugins/registry'
+    'configuration/plugins/registry',
+    'util/vertex/formatters',
+    'util/withDataRequest',
+    'util/acl'
 ], function(
     defineComponent,
     template,
-    registry) {
+    registry,
+    F,
+    withDataRequest,
+    acl) {
     'use strict';
+
+    registry.documentExtensionPoint('org.visallo.detail.toolbar',
+        'Add detail pane toolbar items',
+        function(e) {
+            return e === 'DIVIDER' || (
+                ('event' in e) && ('title' in e)
+                );
+        },
+        'http://docs.visallo.org/extension-points/front-end/detailToolbar'
+    );
 
     var DIVIDER = {
             divider: true
         },
-        ToolbarComponent = defineComponent(Toolbar);
+        ToolbarComponent = defineComponent(Toolbar, withDataRequest);
 
     ToolbarComponent.ITEMS = {
         DIVIDER: DIVIDER,
@@ -62,14 +78,22 @@ define([
     function Toolbar() {
         this.defaultAttrs({
             toolbarItemSelector: 'li',
-            toolbar: [],
-            objects: {}
+            ignoreUpdateModelNotImplemented: true
         });
 
         this.after('initialize', function() {
-            var toolbarItems = this.attr.toolbar,
-                objects = _.extend({ vertices: [], edges: []}, this.attr.objects),
-                toolbarExtensions = registry.extensionsForPoint('org.visallo.detail.toolbar');
+            var model = this.attr.model;
+
+            acl.getPropertyAcls(model).then((propertyAcls) => {
+                this.initializeToolbar(model, propertyAcls);
+            });
+        });
+
+        this.initializeToolbar = function(model, propertyAcls) {
+            var config = this.calculateItemsForModel(model, propertyAcls),
+                toolbarItems = config.items,
+                objects = config.objects,
+                toolbarExtensions = _.sortBy(registry.extensionsForPoint('org.visallo.detail.toolbar'), 'title');
 
             toolbarExtensions.forEach(function(item) {
                 if (!_.isFunction(item.canHandle) || item.canHandle(objects)) {
@@ -86,7 +110,7 @@ define([
                 toolbarItemSelector: this.onToolbarItem
             });
             if (toolbarItems.length) {
-                this.$node.html(template(this.attr));
+                this.$node.html(template(config));
                 this.$node.find('li').each(function() {
                     var $this = $(this),
                         shouldHide = $this.hasClass('has-submenu') ?
@@ -102,7 +126,63 @@ define([
             } else {
                 this.$node.hide();
             }
-        });
+        };
+
+        this.calculateItemsForModel = function(model, propertyAcls) {
+            var isArray = _.isArray(model),
+                vertices = isArray ? _.where(model, { type: 'vertex' }) : (model.type === 'vertex' ? [model] : []),
+                edges = isArray ? _.where(model, { type: 'edge' }) : (model.type === 'edge' ? [model] : []);
+
+            if (isArray) {
+                return {
+                    items: [
+                        {
+                            title: i18n('detail.toolbar.open'),
+                            submenu: [
+                                ToolbarComponent.ITEMS.FULLSCREEN
+                            ].concat(this.selectionHistory())
+                        },
+                        {
+                            title: i18n('detail.multiple.selected', F.number.pretty(model.length)),
+                            cls: 'disabled',
+                            right: true,
+                            event: 'none'
+                        }
+                    ],
+                    objects: { vertices: vertices, edges: edges }
+                }
+            }
+
+            return {
+                items: [
+                    {
+                        title: i18n('detail.toolbar.open'),
+                        submenu: _.compact([
+                            ToolbarComponent.ITEMS.FULLSCREEN,
+                            this.sourceUrlToolbarItem(model),
+                            this.openToolbarItem(model),
+                            this.downloadToolbarItem(model)
+                        ]).concat(this.selectionHistory())
+                    },
+                    {
+                        title: i18n('detail.toolbar.add'),
+                        submenu: _.compact([
+                            this.addPropertyToolbarItem(model, propertyAcls),
+                            this.addImageToolbarItem(model),
+                            this.addCommentToolbarItem(model, propertyAcls)
+                        ])
+                    },
+                    {
+                        icon: 'img/glyphicons/white/glyphicons_157_show_lines@2x.png',
+                        right: true,
+                        submenu: _.compact([
+                            this.deleteToolbarItem(model)
+                        ])
+                    }
+                ],
+                objects: { vertices: vertices, edges: edges }
+            };
+        };
 
         this.onToolbarItem = function(event) {
             var self = this,
@@ -141,10 +221,121 @@ define([
         };
 
         this.hideMenu = function() {
-            var node = this.$node.addClass('hideSubmenus');
-            _.delay(function() {
-                node.removeClass('hideSubmenus');
-            }, 500);
+            var node = this.$node.addClass('hideSubmenus'),
+                remove = _.once(function() {
+                    node.removeClass('hideSubmenus');
+                });
+            $(window).one('mousemove click', remove);
+        };
+
+        this.selectionHistory = function() {
+            if ('selectedObjectsStack' in visalloData) {
+                var menus = [],
+                    stack = visalloData.selectedObjectsStack;
+
+                for (var i = stack.length - 1; i >= 0; i--) {
+                    var s = stack[i];
+                    menus.push({
+                        title: s.title,
+                        cls: 'history-item',
+                        event: 'selectObjects',
+                        eventData: {
+                            vertexIds: s.vertexIds,
+                            edgeIds: s.edgeIds
+                            //options: {
+                                //ignoreMultipleSelectionOverride: true
+                            //}
+                        }
+                    });
+                }
+                if (menus.length) {
+                    menus.splice(0, 0, DIVIDER, {
+                        title: 'Previously Viewed',
+                        cls: 'disabled'
+                    });
+                }
+                return menus;
+            }
+        };
+
+        this.openToolbarItem = function(model) {
+            var rawProps = F.vertex.props(model, 'http://visallo.org#raw');
+            if (rawProps.length) {
+                return {
+                    title: i18n('detail.artifact.open.original'),
+                    subtitle: i18n('detail.artifact.open.original.subtitle'),
+                    event: 'openOriginal'
+                };
+            }
+        };
+
+        this.downloadToolbarItem = function(model) {
+            var rawProps = F.vertex.props(model, 'http://visallo.org#raw');
+            if (rawProps.length) {
+                return {
+                    title: i18n('detail.artifact.open.download.original'),
+                    subtitle: i18n('detail.artifact.open.download.original.subtitle'),
+                    event: 'downloadOriginal'
+                };
+            }
+        };
+
+        this.sourceUrlToolbarItem = function(model) {
+            if (_.isObject(model) && _.isArray(model.properties)) {
+                var sourceUrl = _.findWhere(model.properties, { name: 'http://visallo.org#sourceUrl' });
+
+                if (sourceUrl) {
+                    return {
+                        title: i18n('detail.toolbar.open.source_url'),
+                        subtitle: i18n('detail.toolbar.open.source_url.subtitle'),
+                        event: 'openSourceUrl',
+                        eventData: {
+                            sourceUrl: sourceUrl.value
+                        }
+                    };
+                }
+            }
+        };
+
+        this.addPropertyToolbarItem = function(model, propertyAcls) {
+            var commentPropertyAcls = _.reject(propertyAcls, function(property) {
+                    return property.name === 'http://visallo.org/comment#entry';
+                }),
+                hasAddableProperties = _.where(commentPropertyAcls, { addable: true }).length > 0,
+                disableAdd = (model.hasOwnProperty('updateable') && !model.updateable) || !hasAddableProperties;
+
+            if (!disableAdd) {
+                return ToolbarComponent.ITEMS.ADD_PROPERTY;
+            }
+        };
+
+        this.addImageToolbarItem = function(model) {
+            var displayType = F.vertex.displayType(model);
+            var disableAddImage = (model.hasOwnProperty('updateable') && !model.updateable || model.type === 'edge');
+
+            if (!disableAddImage && (displayType !== 'image' && displayType !== 'video')) {
+                return ToolbarComponent.ITEMS.ADD_IMAGE;
+            }
+        };
+
+        this.addCommentToolbarItem = function(model, propertyAcls) {
+            var hasAddableCommentProperty = _.where(propertyAcls, { name: 'http://visallo.org/comment#entry', addable: true }).length > 0,
+                disableAdd = (model.hasOwnProperty('updateable') && !model.updateable) || !hasAddableCommentProperty;
+
+            if (!disableAdd) {
+                return ToolbarComponent.ITEMS.ADD_COMMENT;
+            }
+        };
+
+        this.deleteToolbarItem = function(model) {
+            var disableDelete = model.hasOwnProperty('deleteable') && !model.deleteable;
+
+            if (!disableDelete) {
+                return _.extend(ToolbarComponent.ITEMS.DELETE_ITEM, {
+                    title: model.type === 'vertex' ? i18n('detail.toolbar.delete.entity') : i18n('detail.toolbar.delete.edge'),
+                    subtitle: model.type === 'vertex' ? i18n('detail.toolbar.delete.entity.subtitle') : i18n('detail.toolbar.delete.edge.subtitle')
+                })
+            }
         };
     }
 });

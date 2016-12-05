@@ -1,6 +1,7 @@
 /data/
 target/
-.idea
+.idea/*
+!.idea/runConfigurations/
 *.iml
 .vagrant
 .settings/
@@ -16,3 +17,5 @@ _site
 docs/_book/
 logs/
 dependency-reduced-pom.xml
+datastore/
+docs/java

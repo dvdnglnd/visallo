@@ -1,14 +1,15 @@
 define([
     'require',
     'flight/lib/component',
-    '../withDropdown',
+    'util/withDropdown',
     'tpl!./propForm',
-    'fields/selection/selection',
+    'util/ontology/propertySelect',
     'tpl!util/alert',
     'util/withTeardown',
     'util/vertex/vertexSelect',
     'util/vertex/formatters',
-    'util/withDataRequest'
+    'util/withDataRequest',
+    'util/acl'
 ], function(
     require,
     defineComponent,
@@ -19,7 +20,8 @@ define([
     withTeardown,
     VertexSelector,
     F,
-    withDataRequest
+    withDataRequest,
+    acl
 ) {
     'use strict';
 
@@ -49,6 +51,8 @@ define([
             var self = this,
                 property = this.attr.property,
                 vertex = this.attr.data;
+
+            this.modified = {};
 
             this.on('click', {
                 saveButtonSelector: this.onSave,
@@ -104,30 +108,27 @@ define([
         });
 
         this.setupPropertySelectionField = function() {
-            var self = this,
-                ontologyRequest,
-                aclRequest;
+            let ontologyRequest;
 
             if (F.vertex.isEdge(this.attr.data)) {
                 ontologyRequest = this.dataRequest('ontology', 'propertiesByRelationship', this.attr.data.label);
-                aclRequest = this.dataRequest('edge', 'acl', this.attr.data.id);
             } else {
                 ontologyRequest = this.dataRequest('ontology', 'propertiesByConceptId',
                     F.vertex.prop(this.attr.data, 'conceptType'));
-                aclRequest = this.dataRequest('vertex', 'acl', this.attr.data.id);
             }
 
-            Promise.all([ontologyRequest, aclRequest]).done(function(results) {
-                var ontologyProperties = results[0],
-                    acl = results[1];
-
-                FieldSelection.attachTo(self.select('propertyListSelector'), {
+            Promise.all([
+                ontologyRequest,
+                acl.getPropertyAcls(this.attr.data)
+            ]).spread((ontologyProperties, propertyAcls) => {
+                FieldSelection.attachTo(this.select('propertyListSelector'), {
                     properties: ontologyProperties.list,
                     focus: true,
                     placeholder: i18n('property.form.field.selection.placeholder'),
-                    unsupportedProperties: _.pluck(_.where(acl.propertyAcls, { addable: false }), 'name')
+                    unsupportedProperties: _.pluck(_.where(propertyAcls, {addable: false}), 'name')
                 });
-                self.manualOpen();
+
+                this.manualOpen();
             });
         };
 
@@ -253,6 +254,9 @@ define([
                     vertexProperty.metadata['http://visallo.org#visibilityJson'],
                 sandboxStatus = vertexProperty && vertexProperty.sandboxStatus,
                 isExistingProperty = typeof vertexProperty !== 'undefined',
+                isEditingVisibility = propertyName === 'http://visallo.org#visibilityJson' || (
+                    vertexProperty && vertexProperty.streamingPropertyValue
+                ),
                 previousValues = disablePreviousValuePrompt !== true && F.vertex.props(this.attr.data, propertyName),
                 previousValuesUniquedByKey = previousValues && _.unique(previousValues, _.property('key')),
                 previousValuesUniquedByKeyUpdateable = _.where(previousValuesUniquedByKey, {updateable: true});
@@ -303,44 +307,40 @@ define([
             this.select('visibilitySelector').show();
             this.select('saveButtonSelector').show();
 
-            this.select('deleteButtonSelector')
+            var deleteButton = this.select('deleteButtonSelector')
                 .toggle(
                     !!isExistingProperty &&
-                    propertyName !== 'http://visallo.org#visibilityJson'
+                    !isEditingVisibility
                 );
 
             var button = this.select('saveButtonSelector')
                 .text(isExistingProperty ? i18n('property.form.button.update') : i18n('property.form.button.add'));
-            if (isExistingProperty) {
-                button.removeAttr('disabled');
-            } else {
-                button.attr('disabled', true);
-            }
+
+            button.attr('disabled', true);
 
             this.dataRequest('ontology', 'properties').done(function(properties) {
                 var propertyDetails = properties.byTitle[propertyName];
+                if (!propertyDetails.deleteable) {
+                    deleteButton.hide();
+                }
                 self.currentPropertyDetails = propertyDetails;
                 if (propertyName === 'http://visallo.org#visibilityJson') {
-                    require(['util/visibility/edit'], function(Visibility) {
-                        var val = vertexProperty && vertexProperty.value,
-                            source = (val && val.source) || (val && val.value && val.value.source);
-
-                        Visibility.attachTo(visibility, {
-                            value: source || ''
-                        });
-                        visibility.find('input').focus();
-                        self.settingVisibility = true;
-                        self.visibilitySource = { value: source, valid: true };
-
-                        self.checkValid();
-                        self.manualOpen();
-                    });
+                    var val = vertexProperty && vertexProperty.value,
+                        source = (val && val.source) || (val && val.value && val.value.source);
+                    self.editVisibility(visibility, source);
+                } else if (vertexProperty && vertexProperty.streamingPropertyValue && vertexProperty.metadata) {
+                    var visibilityMetadata = vertexProperty.metadata['http://visallo.org#visibilityJson'];
+                    self.editVisibility(visibility, visibilityMetadata.source);
                 } else if (propertyDetails) {
                     var isCompoundField = propertyDetails.dependentPropertyIris &&
                         propertyDetails.dependentPropertyIris.length,
                         fieldComponent;
 
                     if (isCompoundField) {
+                        const dependentProperties = property.key ?
+                            F.vertex.props(self.attr.data, propertyName, property.key) :
+                            F.vertex.props(self.attr.data, propertyName);
+                        self.currentValue = _.pluck(dependentProperties, 'value');
                         fieldComponent = 'fields/compound/compound';
                     } else if (propertyDetails.displayType === 'duration') {
                         fieldComponent = 'fields/duration';
@@ -385,7 +385,7 @@ define([
                             PropertyField.attachTo(config, {
                                 property: propertyDetails,
                                 vertex: self.attr.data,
-                                values: property.key ?
+                                values: property.key !== undefined ?
                                     F.vertex.props(self.attr.data, propertyDetails.title, property.key) :
                                     null
                             });
@@ -406,19 +406,70 @@ define([
                                 } : null
                             });
                         }
+                        self.previousPropertyValue = self.getConfigurationValues();
                     });
                 } else console.warn('Property ' + propertyName + ' not found in ontology');
             });
         };
 
+        this.editVisibility = function(visibility, source) {
+            var self = this;
+            require(['util/visibility/edit'], function(Visibility) {
+                Visibility.attachTo(visibility, {
+                    value: source || ''
+                });
+                visibility.find('input').focus();
+                self.settingVisibility = true;
+                self.visibilitySource = { value: source || '', valid: true };
+
+                self.checkValid();
+                self.manualOpen();
+            });
+        }
+
         this.onVisibilityChange = function(event, data) {
+            var self = this;
+
+            this.select('visibilityInputSelector').toggleClass('invalid', !data.valid);
             this.visibilitySource = data;
+            this.modified.visibility = this.currentProperty.metadata ? visibilityModified() : !!this.visibilitySource.value;
             this.checkValid();
+
+            function visibilityModified() {
+                var currentVisibility = self.visibilitySource.value,
+                    previousVisibility;
+                if (self.currentProperty.title === 'http://visallo.org#visibilityJson') {
+                    previousVisibility = self.currentProperty.value.source;
+                } else {
+                    previousVisibility = self.currentProperty.metadata['http://visallo.org#visibilityJson'].source;
+                }
+
+                if (!currentVisibility) {
+                    return !!previousVisibility;
+                } else {
+                    return currentVisibility !== previousVisibility;
+                }
+            }
         };
 
         this.onJustificationChange = function(event, data) {
+            var self = this;
+
             this.justification = data;
+            this.modified.justification = this.currentProperty.metadata ? justificationModified() : !!this.justification.justificationText;
             this.checkValid();
+
+            function justificationModified() {
+                var previousJustification = self.currentProperty.metadata['http://visallo.org#justification'],
+                    currentJustificationText = self.justification && self.justification.hasOwnProperty('justificationText') ?
+                        self.justification.justificationText : undefined;
+
+                if (previousJustification !== undefined) {
+                    return currentJustificationText !== previousJustification.justificationText;
+                } else {
+                    return !!currentJustificationText;
+                }
+            }
         };
 
         this.onPropertyInvalid = function(event, data) {
@@ -432,9 +483,14 @@ define([
             if (this.settingVisibility) {
                 this.valid = this.visibilitySource && this.visibilitySource.valid;
             } else {
-                this.valid = !this.propertyInvalid &&
+                var valid = !this.propertyInvalid &&
                     (this.visibilitySource && this.visibilitySource.valid) &&
-                    (this.justification && this.justification.valid);
+                    (this.justification ? this.justification.valid : true);
+                var empty = _.reject(this.$node.find('.configuration input'), function(input) {
+                    return !input.required || !!input.value;
+                }).length > 0;
+
+                this.valid = valid && !empty && _.some(this.modified);
             }
 
             if (this.valid) {
@@ -445,9 +501,9 @@ define([
         };
 
         this.onPropertyChange = function(event, data) {
-            this.propertyInvalid = false;
-            this.checkValid();
+            var self = this;
 
+            this.propertyInvalid = false;
             event.stopPropagation();
 
             var isCompoundField = this.currentPropertyDetails.dependentPropertyIris,
@@ -476,6 +532,20 @@ define([
             }
 
             this.currentMetadata = data.metadata;
+            this.modified.value = this.currentProperty.value ? valueModified() : !!this.currentValue;
+            this.checkValid();
+
+
+            function valueModified() {
+                var previousValue = self.previousPropertyValue,
+                    propertyValue = self.getConfigurationValues();
+
+                if (previousValue !== undefined) {
+                    return propertyValue !== previousValue;
+                } else {
+                    return !!propertyValue;
+                }
+            }
         };
 
         this.onPropertyError = function(event, data) {
@@ -489,6 +559,12 @@ define([
             _.defer(this.clearLoading.bind(this));
         };
 
+        this.getConfigurationValues = function() {
+            var config = this.select('configurationSelector').lookupAllComponents().shift();
+
+            return _.isFunction(config.getValue) ? config.getValue() : config.getValues();
+        };
+
         this.onKeyup = function(evt) {
             if (evt.which === $.ui.keyCode.ENTER) {
                 this.onSave();
@@ -499,11 +575,14 @@ define([
             _.defer(this.buttonLoading.bind(this, this.attr.deleteButtonSelector));
             this.trigger('deleteProperty', {
                 vertexId: this.attr.data.id,
-                property: _.pick(this.currentProperty, 'key', 'name')
+                property: _.pick(this.currentProperty, 'key', 'name'),
+                node: this.node
             });
         };
 
         this.onSave = function(evt) {
+            var self = this;
+
             if (!this.valid) return;
 
             var vertexId = this.attr.data.id,
@@ -541,7 +620,8 @@ define([
                             visibilitySource: this.visibilitySource.value,
                             oldVisibilitySource: oldVisibilitySource,
                             metadata: this.currentMetadata
-                        }, justification)
+                        }, justification),
+                    node: this.node
                 });
             }
         };

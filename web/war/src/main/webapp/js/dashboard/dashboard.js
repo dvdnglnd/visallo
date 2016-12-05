@@ -5,9 +5,11 @@ define([
     'util/withDataRequest',
     'util/withWorkspaceHelper',
     'util/promise',
+    'util/component/attacher',
     'hbs!./dashboardTpl',
     'hbs!./item',
     'hbs!./addItemTpl',
+    './extensionToolbarPopover',
     'gridstack',
     'require',
     './registerDefaultItems',
@@ -19,9 +21,11 @@ define([
     withDataRequest,
     withWorkspaceHelper,
     Promise,
+    Attacher,
     template,
     itemTemplate,
     addItemTemplate,
+    ToolbarExtensionPopover,
     gridStack,
     require) {
     'use strict';
@@ -29,8 +33,12 @@ define([
     registry.documentExtensionPoint('org.visallo.web.dashboard.item',
         'Add items that can be placed on dashboards',
         function(e) {
-            return (_.isString(e.componentPath) || _.isObject(e.report));
-        }
+            return _.isString(e.identifier) &&
+                (_.isString(e.componentPath) || _.isObject(e.report)) &&
+                e.title &&
+                e.description;
+        },
+        'http://docs.visallo.org/extension-points/front-end/dashboard/item.html'
     );
 
     registry.documentExtensionPoint('org.visallo.web.dashboard.reportrenderer',
@@ -41,21 +49,36 @@ define([
                 e.identifier &&
                 _.isString(e.label) &&
                 e.componentPath;
-        }
+        },
+        'http://docs.visallo.org/extension-points/front-end/dashboard/report.html'
     );
 
     registry.documentExtensionPoint('org.visallo.web.dashboard.layout',
         'Define dashboard layout for new workspaces',
         function(e) {
             return _.isArray(e);
+        },
+        'http://docs.visallo.org/extension-points/front-end/dashboard/layout.html'
+    );
+
+    registry.documentExtensionPoint('org.visallo.dashboard.toolbar.item',
+        'Define toolbar items for dashboard cards',
+        function(e) {
+            return e.identifier && e.icon && e.action && (
+                (e.action.type === 'popover' && e.action.componentPath) ||
+                e.action.type === 'event'
+            );
         }
     );
 
     var reportRenderers,
+        toolbarExtensions,
+        toolbarExtensionsById,
         extensions,
         extensionsById,
         layouts,
         ConfigPopover,
+        ignoreGridStackChange = false,
         defaultGridOptions = Object.freeze({
             width: 4,
             height: 4,
@@ -72,9 +95,11 @@ define([
             headerSelector: '.header input',
             refreshSelector: '.header .refresh',
             editDashboardSelector: '.edit-dashboard',
+            itemContentSelector: '.grid-stack-item-content > .item-content',
             configureItemSelector: '.grid-stack-item-content > h1 .configure',
             removeItemSelector: '.remove-item',
-            gridScrollerSelector: '.grid-scroller'
+            gridScrollerSelector: '.grid-scroller',
+            toolbarExtensionSelector: '.card-toolbar-item'
         });
 
         this.after('initialize', function() {
@@ -83,6 +108,8 @@ define([
             reportRenderers = registry.extensionsForPoint('org.visallo.web.dashboard.reportrenderer');
             extensions = registry.extensionsForPoint('org.visallo.web.dashboard.item');
             layouts = registry.extensionsForPoint('org.visallo.web.dashboard.layout');
+            toolbarExtensions = registry.extensionsForPoint('org.visallo.dashboard.toolbar.item');
+            toolbarExtensionsById = _.indexBy(toolbarExtensions, 'identifier');
             extensionsById = _.indexBy(extensions, 'identifier');
 
             this.request = this.dataRequest.bind(this, 'dashboard');
@@ -91,7 +118,7 @@ define([
             this.$node.text('Loading...');
 
             this.on('click', function(e) {
-                if ($(e.target).is('.grid-scroller, .grid-stack, .grid-stack-item, .item-content')) {
+                if ($(e.target).closest('.header, .grid-scroller, .grid-stack, .grid-stack-item, .item-content').length) {
                     self.trigger('selectObjects');
                 }
             });
@@ -99,20 +126,25 @@ define([
                 editDashboardSelector: this.onEditDashboard,
                 configureItemSelector: this.onConfigure,
                 removeItemSelector: this.onRemoveItem,
-                refreshSelector: this.onRefresh
+                refreshSelector: this.onRefresh,
+                toolbarExtensionSelector: this.onToolbarExtensionClick
             });
             this.on('change keyup', {
                 headerSelector: this.onChangeTitle
             });
-            this.on('showError', this.onShowError);
-            this.on('finishedLoading', this.onFinishedLoading);
-            this.on('configureItem', this.onConfigureItem);
-            this.on('configurationChanged', this.onConfigurationChanged);
             this.on('addItem', this.onAddItem);
+            this.on('configurationChanged', {
+                configureItemSelector: function(event, data) {
+                    event.stopPropagation();
+                    this.onConfigurationChanged({ node: () => event.target }, data);
+                }
+            })
             this.on('drag dragcreate dragstart dropcreate drop dropover dropout resizecreate resizestart resizestop', function(event) {
-                event.stopPropagation();
-                if (event.type === 'resizestart' || event.type === 'dragstart') {
-                    self.removeAddItem();
+                if ($(event.target).is('.grid-stack-item')) {
+                    event.stopPropagation();
+                    if (event.type === 'resizestart' || event.type === 'dragstart') {
+                        self.removeAddItem();
+                    }
                 }
             });
             this.on(document, 'windowResize', this.onWindowResize);
@@ -123,10 +155,38 @@ define([
             var load = _.once(this.loadWorkspaceAndListenOn.bind(this, this.onWorkspaceLoaded));
             this.on(document, 'didToggleDisplay', function(event, data) {
                 if (data.name === 'dashboard' && data.visible) {
+                    this.adjustHeader();
                     load();
                 }
             })
         });
+
+        this.onToolbarExtensionClick = function(event) {
+            var $item = $(event.target).closest('.card-toolbar-item'),
+                $button = $item.find('button'),
+                extensionId = $item.data('identifier'),
+                extension = toolbarExtensionsById[extensionId],
+                itemId = $item.closest('.grid-stack-item').attr('data-item-id'),
+                item = _.findWhere(this.dashboard.items, { id: itemId });
+
+            if (extension && item) {
+                switch (extension.action && extension.action.type || '') {
+                  case 'popover':
+                    this.toggleExtensionPopover($button, item, extension);
+                    break;
+
+                  case 'event':
+                    $item.trigger(extension.action.name, {
+                        item: item,
+                        extension: extension
+                    });
+                    break;
+
+                  default:
+                      throw new Error('Unknown action for toolbar item extension: ' + JSON.stringify(extension));
+                }
+            } else throw new Error('Extension not found for toolbar item: ' + event.target);
+        };
 
         this.onRefresh = function(event) {
             this.trigger('dashboardRefreshData');
@@ -156,16 +216,13 @@ define([
             });
         };
 
-        this.onFinishedLoading = function(event) {
-            $(event.target).closest('.grid-stack-item').removeClass('loading-card');
+        this.onFinishedLoading = function(attacher) {
+            $(attacher.node()).closest('.grid-stack-item').removeClass('loading-card');
         };
 
-        this.onShowError = function(event) {
-            $(event.target)
-                .closest('.grid-stack-item')
-                .find('.item-content')
-                .empty()
-                .append(
+        this.onShowError = function(attacher) {
+            $(attacher.teardown().node())
+                .html(
                     $('<div>')
                         .addClass('error')
                         .append(
@@ -181,11 +238,17 @@ define([
         };
 
         this.onWorkspaceUpdated = function(event, data) {
+            var self = this;
             if (data.workspace.workspaceId === this.currentWorkspaceId) {
-                if (!this.dashboard.title || this.dashboard.title === this.workspaceTitle) {
-                    this.$node.children('h1').find('input').val(data.workspace.title);
-                    this.dashboard.title = '';
+                if (!this.dashboard.title || (this.dashboard.title === this.workspaceTitle && this.dashboard.title !== data.workspace.title)) {
+                    var previousTitle = this.dashboard.title;
+                    var newTitle = this.dashboard.title = data.workspace.title;
+                    this.$node.children('h1').find('input').val(newTitle);
                     this.adjustHeader();
+                    this.requestTitleChange(newTitle)
+                        .catch(function() {
+                            self.dashboard.title = previousTitle;
+                        });
                 }
                 this.workspaceTitle = data.workspace.title;
             }
@@ -197,11 +260,10 @@ define([
             this.loadDashboards(workspace);
         };
 
-        this.onConfigurationChanged = function(event, data) {
-            var node = $(event.target).closest('.grid-stack-item'),
+        this.onConfigurationChanged = function(attacher, data) {
+            var node = $(attacher.node()).closest('.grid-stack-item'),
                 cloned = this.cloneItemConfiguration(data.item),
                 changed = !_.isEqual(this.configuringItem, cloned);
-
 
             if (data.options && data.options.changed === 'item.title') {
                 node.find('.grid-stack-item-content > h1 span').text(
@@ -211,7 +273,15 @@ define([
                 this.createDashboardItemComponent(node, data.item);
             }
             if (changed) {
+                if (!data.extension) {
+                    data.extension = extensionsById[data.item.extensionId];
+                }
+                this.updateToolbarExtensions(node, data.item, data.extension);
                 this.configuringItem = cloned;
+                var index = _.findIndex(this.dashboard.items, (i) => i.id === data.item.id);
+                if (index >= 0) {
+                    this.dashboard.items.splice(index, 1, data.item);
+                }
                 this.request('dashboardItemUpdate', data.item);
             }
         };
@@ -220,14 +290,17 @@ define([
             return JSON.parse(JSON.stringify(_.pick(item, 'configuration', 'title')));
         };
 
-        this.onConfigureItem = function(event) {
+        this.onConfigureItem = function(attacher) {
             var self = this,
-                $gridItem = $(event.target).closest('.grid-stack-item'),
-                node = $gridItem.find('.grid-stack-item-content > h1 .configure'),
-                alreadyAttached = ConfigPopover && node.lookupComponent(ConfigPopover);
+                $gridItem = $(attacher.node()).closest('.grid-stack-item'),
+                configureNode = $gridItem.find('.grid-stack-item-content > h1 .configure'),
+                alreadyAttached = ConfigPopover && configureNode.lookupComponent(ConfigPopover);
 
             if (alreadyAttached) {
-                return node.teardownComponent(ConfigPopover);
+                _.defer(function() {
+                    configureNode.teardownComponent(ConfigPopover);
+                });
+                return;
             }
 
             require(['./configure'], function(_ConfigPopover) {
@@ -238,36 +311,64 @@ define([
                 self.configuringItem = self.cloneItemConfiguration(item);
 
                 if (item) {
-                    if (node.lookupComponent(ConfigPopover)) {
-                        node.teardownComponent(ConfigPopover);
+                    if (configureNode.lookupComponent(ConfigPopover)) {
+                        configureNode.teardownComponent(ConfigPopover);
                     } else {
-                        ConfigPopover.attachTo(node, {
+                        ConfigPopover.attachTo(configureNode, {
                             item: item,
                             scrollSelector: '.grid-scroller'
                         });
+                        self.trigger('positionDialog');
                     }
                 }
             })
         };
 
         this.onConfigure = function(event) {
-            this.trigger(event.target, 'configureItem');
+            this.onConfigureItem({ node: () => event.target });
+        };
+
+        this.toggleExtensionPopover = function($toolbarButton, item, toolbarExtension) {
+            var self = this;
+
+            if ($toolbarButton.lookupComponent(ToolbarExtensionPopover)) {
+                _.defer(function() {
+                    $toolbarButton.teardownAllComponents();
+                });
+                return;
+            }
+
+            Promise.require(toolbarExtension.action.componentPath)
+                .then(function(Component) {
+                    ToolbarExtensionPopover.attachTo($toolbarButton, {
+                        Component: Component,
+                        item: item,
+                        extension: extensionsById[item.extensionId],
+                        scrollSelector: '.grid-scroller'
+                    })
+                })
+        };
+
+        this.requestTitleChange = function(newTitle) {
+            return this.request('dashboardUpdate', {
+                dashboardId: this.dashboard.id,
+                title: newTitle
+            });
         };
 
         this.onChangeTitle = function(event) {
+            var self = this;
             if (event.type === 'change' || event.which === 13) {
-                var newTitle = event.target.value.trim(),
+                var newTitle = event.target.value.trim().replace(/\s+/g, ' '),
                     previousTitle = this.dashboard.title;
 
                 if (newTitle.length) {
                     this.dashboard.title = newTitle;
-                    this.request('dashboardUpdate', {
-                        dashboardId: this.dashboard.id,
-                        title: newTitle
-                    })
+                    this.$node.find('h1.header input').val(newTitle);
+                    this.requestTitleChange(newTitle)
                         .catch(function() {
                             event.target.value = previousTitle;
-                            this.dashboard.title = previousTitle;
+                            self.dashboard.title = previousTitle;
                         });
                 } else {
                     event.target.value = previousTitle || this.workspaceTitle;
@@ -276,6 +377,10 @@ define([
                     event.target.blur();
                     this.adjustHeader();
                 }
+            } else if (event.which === $.ui.keyCode.ESCAPE) {
+                this.onEscapeKey(event);
+            } else if (event.type === 'keyup') {
+                this.adjustHeader();
             }
         };
 
@@ -294,13 +399,14 @@ define([
                 var finished;
                 if (this.$node.hasClass('editing')) {
                     $edit.text('Edit');
+                    ignoreGridStackChange = true;
                     this.$node.find('.new-item').each(function() {
                         self.gridstack.remove_widget(this);
                     });
                     this.gridstack.disable();
                     this.$node.removeClass('editing');
                     finished = Promise.resolve();
-                    $header.attr('readonly', true);
+                    $header.attr('disabled', true);
                 } else {
                     $edit
                         .text(i18n('dashboard.title.editing.done'))
@@ -308,7 +414,7 @@ define([
                     this.$node.addClass('editing');
                     this.gridstack.enable();
                     finished = this.createDashboardItemToGridStack();
-                    $header.removeAttr('readonly');
+                    $header.removeAttr('disabled');
                 }
                 this.adjustHeader();
 
@@ -317,6 +423,7 @@ define([
                         console.error(error)
                     })
                     .then(function() {
+                        ignoreGridStackChange = false;
                         self.gridstack.commit();
                     })
             }
@@ -329,15 +436,19 @@ define([
         this.onRemoveItem = function(event) {
             var self = this,
                 gridItem = $(event.target).closest('.grid-stack-item'),
+                $content = gridItem.find('.item-content'),
                 itemId = gridItem.data('item-id');
 
             if (itemId) {
                 this.request('dashboardItemDelete', itemId)
                     .done(function() {
+                        ignoreGridStackChange = true;
                         self.gridstack.batch_update();
+                        Attacher().node($content).teardown();
                         self.gridstack.remove_widget(gridItem);
                         self.createDashboardItemToGridStack().then(function() {
                             self.gridstack.commit();
+                            ignoreGridStackChange = false;
                         });
                     })
             }
@@ -361,6 +472,7 @@ define([
                     }
                 };
 
+            ignoreGridStackChange = true;
             this.gridstack.batch_update();
             this.gridstack.remove_widget($(event.target).closest('.grid-stack-item'));
             this.gridstack.add_widget(node,
@@ -374,6 +486,7 @@ define([
             Promise.resolve(this.createDashboardItemToGridStack())
                 .then(function() {
                     self.gridstack.commit();
+                    ignoreGridStackChange = false;
                     return self.createDashboardItemComponent(node, item)
                 })
                 .then(function() {
@@ -382,9 +495,28 @@ define([
                 .done(function(result) {
                     item.id = result.dashboardItemId;
                     $(node).attr('data-item-id', item.id);
+                    self.dashboard.items.push(item);
+                    self.updateAllDashboardItems();
+                });
+        };
+
+        this.updateAllDashboardItems = function(){
+            var self = this,
+                stackItemMap = {},
+                nodes = _.reject($(this.$node).find('.grid-stack-item'), function(item) {
+                  return $(item.el).hasClass('new-item');
                 });
 
-            this.dashboard.items.push(item);
+            _.each(nodes, function(item){
+                var id = $(item).data('itemId');
+                stackItemMap[id] = item;
+            });
+
+            _.each(self.dashboard.items, function(item){
+                var id = item.id;
+                item.configuration.metrics = self.metricsForGridItem(stackItemMap[id]);
+                self.request('dashboardItemUpdate', item);
+            });
         };
 
         this.metricsForGridItem = function(el) {
@@ -398,6 +530,10 @@ define([
         };
 
         this.onGridChange = function(el, items) {
+            if (ignoreGridStackChange) {
+                return;
+            }
+
             var self = this,
                 validItems = _.reject(items, function(item) {
                     return $(item.el).hasClass('new-item');
@@ -429,9 +565,9 @@ define([
                     }
                 },
                 { concurrency: 1 }
-            ).done(function() {
-                self.createDashboardItemToGridStackInBatch();
-            })
+            )
+            .then(this.updateAllDashboardItems.bind(this))
+            .done(this.createDashboardItemToGridStackInBatch.bind(this));
         };
 
         this.createDashboardItemToGridStackInBatch = function() {
@@ -454,19 +590,23 @@ define([
 
             var newItem = this.$node.find('.new-item');
             if (newItem.length) {
+                ignoreGridStackChange = true;
                 this.gridstack.remove_widget(newItem);
             }
 
             return this.createNewDashboardItem()
                 .then(function(newItem) {
+                    ignoreGridStackChange = true;
                     self.gridstack.add_widget(newItem);
                     self.gridstack.movable(newItem, false);
                     self.gridstack.resizable(newItem, false);
+                    ignoreGridStackChange = false;
                 });
         };
 
         this.createDashboardItemComponent = function(node, item) {
-            var extension = extensionsById[item.extensionId],
+            var self = this,
+                extension = extensionsById[item.extensionId],
                 path = extension.componentPath,
                 isReport = false,
                 reportConfiguration = {},
@@ -518,16 +658,26 @@ define([
                     if (report || (extension.options && extension.options.flushContent)) {
                         $content.addClass('flush-content');
                     }
-                    $content.teardownAllComponents().empty();
-                    Component.attachTo($content, {
-                        reportConfiguration: reportConfiguration,
-                        report: report,
-                        extension: extension,
-                        item: item
-                    });
+
+                    Attacher().node($content)
+                        .component(Component)
+                        .params({
+                            reportConfiguration: reportConfiguration,
+                            report: report,
+                            extension: extension,
+                            item: item
+                        })
+                        .behavior({
+                            showError: self.onShowError.bind(self),
+                            finishedLoading: self.onFinishedLoading.bind(self),
+                            configureItem: self.onConfigureItem.bind(self),
+                            configurationChanged: self.onConfigurationChanged.bind(self)
+                        })
+                        .attach({ teardown: true, empty: true, legacyFlightEventsNode: $gridItem });
                     if (!report && (!extension.options || !extension.options.manuallyFinishLoading)) {
                         $gridItem.removeClass('loading-card');
                     }
+                    self.updateToolbarExtensions($gridItem, item, extension);
                 })
             } else {
                 console.error('No component to render for ', extension);
@@ -613,14 +763,41 @@ define([
 
         this.createDashboardItemNode = function(item, extension) {
             var config = item && item.configuration || {},
-                metrics = config.metrics || {};
-            return $(itemTemplate({
-                title: item && item.title || extension.title,
-                extension: extension,
-                creator: this.isCreator,
-                dataAttrs: this.gridOptions(_.extend({}, extension.grid, metrics))
-                    .concat([{ key: 'item-id', value: item && item.id }])
-            }));
+                metrics = config.metrics || {},
+                dom = $(itemTemplate({
+                    title: item && item.title || extension.title,
+                    extension: extension,
+                    creator: this.isCreator,
+                    dataAttrs: this.gridOptions(_.extend({}, extension.grid, metrics))
+                        .concat([{ key: 'item-id', value: item && item.id }])
+                }));
+            return dom;
+        };
+
+        this.updateToolbarExtensions = function(el, item, extension) {
+            var validExtensions = _.reject(toolbarExtensions, function(e) {
+                    return _.isFunction(e.canHandle) &&
+                        !e.canHandle({
+                            item: item,
+                            extension: extension,
+                            element: _.isElement(el) ? el : el.get(0)
+                        });
+                }),
+                $toolbar = $(el).find('.card-toolbar'),
+                $configureLi = $toolbar.find('.configure').closest('li'),
+                $extensionRows = $.map(validExtensions, function(e) {
+                    return $('<li>')
+                        .addClass('card-toolbar-item')
+                        .attr('data-identifier', e.identifier)
+                        .append($('<button>').attr('title', e.tooltip).css('background-image', 'url(' + e.icon + ')'))
+                });
+
+            $toolbar.find('.card-toolbar-item').remove();
+            if ($configureLi.length) {
+                $configureLi.before($extensionRows);
+            } else {
+                $toolbar.prepend($extensionRows);
+            }
         };
 
         this.loadDashboards = function(workspace) {
@@ -648,6 +825,7 @@ define([
                 .then(function(dashboard) {
                     self.dashboard = dashboard;
                     self.workspaceTitle = workspace.title;
+                    self.select('itemContentSelector').each((i, node) => Attacher().node(node).teardown());
                     self.$node.removeClass('editing').html(template({
                         creator: self.isCreator,
                         title: dashboard.title || workspace.title,
@@ -675,10 +853,16 @@ define([
 
         this.adjustHeader = function() {
             var $input = this.$node.find('h1.header input'),
-                $span = $('<span>').text($input.val()).insertAfter($input.next('button'));
+                $span = $('<span>')
+                    .text($input.val())
+                    .css('white-space', 'pre')
+                    .insertAfter($input.next('button')),
+                outerWidth = $span.outerWidth();
 
-            $input.width(($span.outerWidth() + 2) + 'px');
-            $span.remove();
+            if (outerWidth) {
+                $input.width((outerWidth + 2) + 'px');
+                $span.remove();
+            }
         };
     }
 });

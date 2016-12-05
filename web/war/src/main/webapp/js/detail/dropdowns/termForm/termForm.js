@@ -1,6 +1,6 @@
 define([
     'flight/lib/component',
-    '../withDropdown',
+    'util/withDropdown',
     'tpl!./termForm',
     'tpl!util/alert',
     'util/vertex/formatters',
@@ -159,11 +159,12 @@ define([
             var parameters = {
                 sign: newObjectSign,
                 propertyKey: this.attr.propertyKey,
+                propertyName: this.attr.propertyName,
                 conceptId: this.selectedConceptId,
                 mentionStart: mentionStart,
                 mentionEnd: mentionEnd,
                 artifactId: this.attr.artifactId,
-                visibilitySource: this.visibilitySource || ''
+                visibilitySource: this.visibilitySource ? this.visibilitySource.value : ''
             };
 
             if (this.currentGraphVertexId) {
@@ -188,6 +189,7 @@ define([
                     parameters.sourceInfo = {
                         vertexId: parameters.artifactId,
                         textPropertyKey: parameters.propertyKey,
+                        textPropertyName: parameters.propertyName,
                         startOffset: parameters.mentionStart,
                         endOffset: parameters.mentionEnd,
                         snippet: self.attr.snippet
@@ -204,6 +206,7 @@ define([
                         self.trigger('termCreated', data);
 
                         self.trigger(document, 'loadEdges');
+                        self.trigger('closeDropdown');
 
                         _.defer(self.teardown.bind(self));
                     })
@@ -215,6 +218,7 @@ define([
                         self.highlightTerm(data);
 
                         self.trigger(document, 'loadEdges');
+                        self.trigger('closeDropdown');
 
                         _.defer(self.teardown.bind(self));
                     })
@@ -242,7 +246,7 @@ define([
                     y1: parseFloat(this.attr.dataInfo.y1),
                     x2: parseFloat(this.attr.dataInfo.x2),
                     y2: parseFloat(this.attr.dataInfo.y2),
-                    visibilitySource: this.visibilitySource || ''
+                    visibilitySource: this.visibilitySource ? this.visibilitySource.value : ''
                 };
 
             if (this.justification && this.justification.justificationText) {
@@ -253,7 +257,7 @@ define([
             if (this.unresolve) {
                 self.unresolveDetectedObject({
                     vertexId: this.attr.artifactData.id,
-                    multiValueKey: this.attr.dataInfo.propertyKey
+                    multiValueKey: this.attr.dataInfo.key || this.attr.dataInfo.propertyKey
                 });
             } else {
                 self.resolveDetectedObject(parameters);
@@ -266,6 +270,7 @@ define([
                 .then(function(data) {
                     self.trigger('termCreated', data);
                     self.trigger(document, 'loadEdges');
+                    self.trigger('closeDropdown');
                     _.defer(self.teardown.bind(self));
                 })
                 .catch(this.requestFailure.bind(this))
@@ -276,6 +281,7 @@ define([
             this.dataRequest('vertex', 'unresolveDetectedObject', parameters)
                 .then(function(data) {
                     self.trigger(document, 'loadEdges');
+                    self.trigger('closeDropdown');
                     _.defer(self.teardown.bind(self));
                 })
                 .catch(this.requestFailure.bind(this))
@@ -292,8 +298,8 @@ define([
         };
 
         this.onVisibilityChange = function(event, data) {
-            this.visibilitySource = data.value;
-            // TODO: inspect valid
+            this.visibilitySource = data;
+            this.checkValid();
         };
 
         this.onJustificationChange = function(event, data) {
@@ -303,8 +309,11 @@ define([
 
         this.checkValid = function() {
             var button = this.select('actionButtonSelector');
+            var visibilityValid = this.visibilitySource && this.visibilitySource.valid;
+
             if (!this.unresolve) {
-                if (this.justification && this.justification.valid && this.selectedConceptId) {
+                this.select('visibilitySelector').find('input').toggleClass('invalid', !visibilityValid);
+                if (this.justification && this.justification.valid && this.selectedConceptId && visibilityValid) {
                     button.removeAttr('disabled');
                 } else {
                     button.attr('disabled', true);
@@ -326,7 +335,6 @@ define([
                 var mentionVertex = $(this.attr.mentionNode);
                 data = mentionVertex.data('info');
                 existingEntity = this.attr.existing ? mentionVertex.addClass('focused').hasClass('resolved') : false;
-                graphVertexId = data && data.resolvedToVertexId;
                 title = $.trim(data && data.title || '');
 
                 if (this.attr.selection && !existingEntity) {
@@ -340,7 +348,8 @@ define([
 
                 if (existingEntity && mentionVertex.hasClass('resolved')) {
                     objectSign = title;
-                    this.unresolve = true;
+                    this.unresolve = this.attr.unresolve;
+                    graphVertexId = this.unresolve && data && (data.resolvedToVertexId || data.resolvedVertexId);
                     this.termMentionId = data && data.id;
                 } else {
                     objectSign = this.attr.sign || mentionVertex.text();
@@ -349,8 +358,8 @@ define([
                 data = this.attr.dataInfo;
                 objectSign = data && data.title;
                 existingEntity = this.attr.existing;
-                graphVertexId = data && (data.resolvedToVertexId || data.resolvedVertexId);
-                this.unresolve = graphVertexId && graphVertexId !== '';
+                this.unresolve = this.attr.unresolve;
+                graphVertexId = this.unresolve && data && (data.resolvedToVertexId || data.resolvedVertexId);
             }
 
             vertex.html(dropdownTemplate({
@@ -495,7 +504,10 @@ define([
                 r.selectNodeContents(dd.get(0));
                 transcriptIndex = dd.data('index');
             } else {
-                r.selectNodeContents(this.$node.closest('.text').get(0));
+                var $text = this.$node.closest('.text');
+                if ($text.length) {
+                    r.selectNodeContents($text.get(0));
+                }
             }
             r.setEnd(range.startContainer, range.startOffset);
             var l = r.toString().length;

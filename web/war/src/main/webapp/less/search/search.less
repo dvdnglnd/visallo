@@ -46,14 +46,44 @@ width: 215px;
     padding-right: 28px;
   }
 
+  .below-query {
+    display: flex;
+    .extensions {
+      flex: 1;
+      text-align: right;
+      min-height: 20px;
+      display: block;
+
+      & > button {
+        background: none;
+        border: 0;
+        margin: -2px 0 0 0;
+        padding: 0;
+        background-size: 60%;
+        background-position: center;
+        width: 20px;
+        height: 20px;
+        font-size: 0;
+        opacity: 0.4;
+        background-repeat: no-repeat;
+        &:hover {
+           opacity: 0.8;    
+        }
+      }
+    }
+  }
+
   .search-hits {
     font-size: 95%;
-    margin: 0;
+    margin: 0 0 0 0.5em;
     color: #999;
     text-align: right;
     text-shadow: 0 1px 0 white;
     font-style: italic;
     text-align: right;
+    &:empty {
+      display: none;
+    }
   }
 
   .search-query-container {
@@ -160,6 +190,10 @@ width: 215px;
     span {
       font-size: 90%;  
     }    
+  }
+
+  .org-visallo-video-scrubber {
+      position: static;
   }
 }
 
@@ -384,6 +418,53 @@ width: 215px;
     display: block;
     input[type=checkbox] {
       vertical-align: baseline;
+    }
+
+    .radius {
+      margin-bottom: 0;
+    }
+    .radius-search {
+      padding: 0 0 0.5em 0;
+    }
+
+    .directory-entity-field-filter-wrap {
+      .directory-entity-field input {
+        margin-bottom: 0;
+      }
+      .switch-current-user,
+      .switch-choose-user {
+        padding: 0;
+        margin: 0 0 0.5em 0;
+        display: none;
+      }
+      .switch-current-user {
+        display: block;
+      }
+      &.current-user {
+        .switch-current-user {
+          display: none;
+        }
+        .switch-choose-user {
+          display: block;
+        }
+
+        .directory-entity-field {
+          display: flex;
+          & > * {
+            min-width: 0;
+            display: inline-block;
+            margin: 0 0.5em 0 0;
+            .box-sizing(border-box);
+          }
+          input {
+            flex: 1 2.5 auto;
+          }
+          span {
+            margin-top: 0.4em;
+            margin-bottom: 0.3em;
+          }
+        }
+      }
     }
 
     .date-field-filter-wrap {

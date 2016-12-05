@@ -5,8 +5,8 @@ import org.visallo.web.clientapi.ApiInvoker;
 
 import org.visallo.web.clientapi.model.ClientApiEdgesExistsResponse;
 import org.visallo.web.clientapi.model.ClientApiElementAcl;
+import org.visallo.web.clientapi.model.ClientApiHistoricalPropertyResults;
 import org.visallo.web.clientapi.model.ClientApiEdgeWithVertexData;
-import org.visallo.web.clientapi.model.ClientApiHistoricalPropertyValues;
 import com.sun.jersey.multipart.FormDataMultiPart;
 
 import javax.ws.rs.core.MediaType;
@@ -78,7 +78,7 @@ public class EdgeApi {
       }
     }
   }
-  public ClientApiHistoricalPropertyValues getPropertyHistory (String graphEdgeId, String propertyKey, String propertyName, Long startTime, Long endTime) throws ApiException {
+  public ClientApiHistoricalPropertyResults getPropertyHistory (String graphEdgeId, String propertyKey, String propertyName, Long startTime, Long endTime) throws ApiException {
     Object postBody = null;
     // verify required params are set
     if(graphEdgeId == null || propertyKey == null || propertyName == null ) {
@@ -119,7 +119,7 @@ public class EdgeApi {
     try {
       String response = apiInvoker.invokeAPI(basePath, path, "GET", queryParams, postBody, headerParams, formParams, contentType);
       if(response != null){
-        return (ClientApiHistoricalPropertyValues) ApiInvoker.deserialize(response, "", ClientApiHistoricalPropertyValues.class);
+        return (ClientApiHistoricalPropertyResults) ApiInvoker.deserialize(response, "", ClientApiHistoricalPropertyResults.class);
       }
       else {
         return null;

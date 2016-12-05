@@ -22,12 +22,15 @@ import java.util.TimeZone;
 
 public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<T> {
     public static final String VISALLO_WORKSPACE_ID_HEADER_NAME = "Visallo-Workspace-Id";
+    public static final String VISALLO_SOURCE_GUID_HEADER_NAME = "Visallo-Source-Guid";
     private static final String LOCALE_LANGUAGE_PARAMETER = "localeLanguage";
     private static final String LOCALE_COUNTRY_PARAMETER = "localeCountry";
     private static final String LOCALE_VARIANT_PARAMETER = "localeVariant";
     private static final String VISALLO_TIME_ZONE_HEADER_NAME = "Visallo-TimeZone";
     private static final String TIME_ZONE_ATTRIBUTE_NAME = "timeZone";
     private static final String TIME_ZONE_PARAMETER_NAME = "timeZone";
+    static final String USER_REQUEST_ATTRIBUTE_NAME = "user";
+    static final String WORKSPACE_ID_ATTRIBUTE_NAME = "workspaceId";
     private final UserRepository userRepository;
     private final Configuration configuration;
 
@@ -37,11 +40,11 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
     }
 
     protected static String getActiveWorkspaceIdOrDefault(final HttpServletRequest request) {
-        String workspaceId = (String) request.getAttribute("workspaceId");
+        String workspaceId = (String) request.getAttribute(WORKSPACE_ID_ATTRIBUTE_NAME);
         if (workspaceId == null || workspaceId.trim().length() == 0) {
             workspaceId = request.getHeader(VISALLO_WORKSPACE_ID_HEADER_NAME);
             if (workspaceId == null || workspaceId.trim().length() == 0) {
-                workspaceId = getOptionalParameter(request, "workspaceId");
+                workspaceId = getOptionalParameter(request, WORKSPACE_ID_ATTRIBUTE_NAME);
                 if (workspaceId == null || workspaceId.trim().length() == 0) {
                     return null;
                 }
@@ -58,6 +61,10 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
         return workspaceId;
     }
 
+    protected static String getSourceGuid(final HttpServletRequest request) {
+        return request.getHeader(VISALLO_SOURCE_GUID_HEADER_NAME);
+    }
+
     public static String getOptionalParameter(final HttpServletRequest request, final String parameterName) {
         Preconditions.checkNotNull(request, "The provided request was invalid");
         return getParameter(request, parameterName, true);
@@ -69,7 +76,11 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
         return getParameterValues(request, parameterName, true);
     }
 
-    public static EnumSet<FetchHint> getOptionalParameterFetchHints(HttpServletRequest request, String parameterName, EnumSet<FetchHint> defaultFetchHints) {
+    public static EnumSet<FetchHint> getOptionalParameterFetchHints(
+            HttpServletRequest request,
+            String parameterName,
+            EnumSet<FetchHint> defaultFetchHints
+    ) {
         String val = getOptionalParameter(request, parameterName);
         if (val == null) {
             return defaultFetchHints;
@@ -82,7 +93,11 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
         }));
     }
 
-    public static Integer getOptionalParameterInt(final HttpServletRequest request, final String parameterName, Integer defaultValue) {
+    public static Integer getOptionalParameterInt(
+            final HttpServletRequest request,
+            final String parameterName,
+            Integer defaultValue
+    ) {
         String val = getOptionalParameter(request, parameterName);
         if (val == null || val.length() == 0) {
             return defaultValue;
@@ -90,12 +105,19 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
         return Integer.parseInt(val);
     }
 
-    public static String[] getOptionalParameterAsStringArray(final HttpServletRequest request, final String parameterName) {
+    public static String[] getOptionalParameterAsStringArray(
+            final HttpServletRequest request,
+            final String parameterName
+    ) {
         Preconditions.checkNotNull(request, "The provided request was invalid");
         return getParameterValues(request, parameterName, true);
     }
 
-    public static Float getOptionalParameterFloat(final HttpServletRequest request, final String parameterName, Float defaultValue) {
+    public static Float getOptionalParameterFloat(
+            final HttpServletRequest request,
+            final String parameterName,
+            Float defaultValue
+    ) {
         String val = getOptionalParameter(request, parameterName);
         if (val == null || val.length() == 0) {
             return defaultValue;
@@ -103,7 +125,11 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
         return Float.parseFloat(val);
     }
 
-    public static Double getOptionalParameterDouble(final HttpServletRequest request, final String parameterName, Double defaultValue) {
+    public static Double getOptionalParameterDouble(
+            final HttpServletRequest request,
+            final String parameterName,
+            Double defaultValue
+    ) {
         String val = getOptionalParameter(request, parameterName);
         if (val == null || val.length() == 0) {
             return defaultValue;
@@ -111,7 +137,11 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
         return Double.parseDouble(val);
     }
 
-    protected static String[] getParameterValues(final HttpServletRequest request, final String parameterName, final boolean optional) {
+    protected static String[] getParameterValues(
+            final HttpServletRequest request,
+            final String parameterName,
+            final boolean optional
+    ) {
         String[] paramValues = request.getParameterValues(parameterName);
 
         if (paramValues == null) {
@@ -144,7 +174,11 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
         return result;
     }
 
-    protected static String getParameter(final HttpServletRequest request, final String parameterName, final boolean optional) {
+    protected static String getParameter(
+            final HttpServletRequest request,
+            final String parameterName,
+            final boolean optional
+    ) {
         String paramValue = request.getParameter(parameterName);
         if (paramValue == null) {
             Object paramValueObject = request.getAttribute(parameterName);
@@ -153,7 +187,10 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
             }
             if (paramValue == null) {
                 if (!optional) {
-                    throw new VisalloException(String.format("Parameter: '%s' is required in the request", parameterName));
+                    throw new VisalloException(String.format(
+                            "Parameter: '%s' is required in the request",
+                            parameterName
+                    ));
                 }
                 return null;
             }
@@ -165,13 +202,20 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
         return getUser(request, getUserRepository());
     }
 
-    public static User getUser(HttpServletRequest request, UserRepository userRepository) {
-        ProxyUser user = (ProxyUser) request.getAttribute("user");
+    public static User getUser(
+            HttpServletRequest request,
+            UserRepository userRepository
+    ) {
+        ProxyUser user = (ProxyUser) request.getAttribute(USER_REQUEST_ATTRIBUTE_NAME);
         if (user != null) {
             return user;
         }
-        user = new ProxyUser(CurrentUser.getUserId(request), userRepository);
-        request.setAttribute("user", user);
+        String userId = CurrentUser.getUserId(request);
+        if (userId == null) {
+            return null;
+        }
+        user = new ProxyUser(userId, userRepository);
+        request.setAttribute(USER_REQUEST_ATTRIBUTE_NAME, user);
         return user;
     }
 
@@ -197,7 +241,10 @@ public abstract class VisalloBaseParameterProvider<T> extends ParameterProvider<
             if (timeZone == null || timeZone.trim().length() == 0) {
                 timeZone = getOptionalParameter(request, TIME_ZONE_PARAMETER_NAME);
                 if (timeZone == null || timeZone.trim().length() == 0) {
-                    timeZone = this.configuration.get(Configuration.DEFAULT_TIME_ZONE, TimeZone.getDefault().getDisplayName());
+                    timeZone = this.configuration.get(
+                            Configuration.DEFAULT_TIME_ZONE,
+                            TimeZone.getDefault().getDisplayName()
+                    );
                 }
             }
         }

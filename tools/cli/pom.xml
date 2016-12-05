@@ -5,7 +5,7 @@
     <parent>
         <artifactId>visallo-tools-group</artifactId>
         <groupId>org.visallo</groupId>
-        <version>1.1-SNAPSHOT</version>
+        <version>3.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -27,23 +27,15 @@
         </dependency>
         <dependency>
             <groupId>org.visallo</groupId>
-            <artifactId>visallo-tools-user-admin</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
             <artifactId>visallo-tools-owl</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Groovy is required when Visallo is configured to use in-process elasticsearch -->
         <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-tools-format</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-tools-requeue</artifactId>
-            <version>${project.version}</version>
+            <groupId>org.codehaus.groovy</groupId>
+            <artifactId>groovy</artifactId>
+            <version>${groovy.version}</version>
+            <scope>runtime</scope>
         </dependency>
     </dependencies>
 

@@ -2,11 +2,13 @@ define([
     'flight/lib/component',
     'util/formatters',
     'util/requirejs/promise!util/service/ontologyPromise',
+    'text!./pieCss.css',
     './withRenderer'
 ], function(
     defineComponent,
     F,
     ontology,
+    pieCss,
     withRenderer) {
     'use strict';
 
@@ -65,6 +67,7 @@ define([
                     })
                     .value();
 
+            this.numBuckets = buckets.length;
             this.isHistogram = root.type === 'histogram';
             var reportAggregations = report.endpointParameters.aggregations.map(JSON.parse);
             this.field = reportAggregations[0].field;
@@ -85,6 +88,7 @@ define([
                     otherSlice.displayName = i18n('dashboard.report.other');
                 }));
             }
+            this.numLabels = sortedData.length;
 
             return sortedData;
         };
@@ -125,6 +129,7 @@ define([
                 svg = d3.select(node).selectAll('svg').data([1]).call(function() {
                     this.enter().append('svg');
                     this.attr('width', width).attr('height', height);
+                    this.append('defs').append('style').attr('type', 'text/css').text(pieCss);
                 }),
                 gPie = svg.selectAll('g').data([1]).call(function() {
                         this.enter().append('g')
@@ -163,6 +168,11 @@ define([
                     .on('mouseover', function(d, i) {
                         tip.show(d, gPie[0][0]);
                         d3.select(this).attr('fill', self.highlightColors[isOtherCategory(d) ? self.OTHER_COLOR_INDEX : i]);
+
+                    })
+                    .on('mousemove', function() {
+                        var $tip = $('#' + tip.attr('id'));
+                        tip.style({left: event.pageX - ($tip.width() / 1.5) + 'px', top: event.pageY - ($tip.height() * 1.75) + 'px'});
                     });
 
             slices.transition().duration(self.TRANSITION_DURATION)
@@ -215,6 +225,37 @@ define([
                     return self.colors[isOtherCategory(d) ? self.OTHER_COLOR_INDEX : n];
                 });
 
+            var maxLabels = (Math.floor(height / self.LEGEND_LABEL_HEIGHT) - 1);
+            gLabels.classed('hidden', function(d, i) {
+                return i >= maxLabels;
+            });
+
+            if (this.numLabels > maxLabels) {
+                var legendInfoItem = gLegend.select('.legend-info');
+                var hiddenBuckets = this.numBuckets - maxLabels;
+
+                if (!legendInfoItem.empty()) {
+                    legendInfoItem.classed('hidden', false)
+                        .select('text').text(i18n('dashboard.report.pie.more', hiddenBuckets));
+                } else {
+                    gLegend.append('g')
+                       .classed({ 'legend-info': true, hidden: false })
+                       .attr('transform', function(d) {
+                           return labelTransform(d, maxLabels);
+                       })
+                       .style('opacity', 0)
+                       .append('text')
+                       .text(i18n('dashboard.report.pie.more', hiddenBuckets))
+                       .attr('x', self.LEGEND_COLOR_SWATCH_SIZE + self.LEGEND_SWATCH_TO_TEXT_MARGIN)
+                       .style('text-anchor', 'start');
+                }
+                gLegend.select('.legend-info').transition().duration(self.TRANSITION_DURATION)
+                    .style('opacity', 1)
+
+            } else {
+                gLegend.select('.legend-info').classed('hidden', true);
+            }
+
             var gLabelXOffset = 2 * radius + self.CHART_PADDING,
                 availableLegendSpace = width - self.CHART_PADDING - gLabelXOffset,
                 availableLegendTextWidth = availableLegendSpace - self.LEGEND_COLOR_SWATCH_SIZE - self.LEGEND_SWATCH_TO_TEXT_MARGIN;
@@ -224,10 +265,10 @@ define([
             } else {
                 gLegend.style('opacity', 1);
                 if (gLegend.node().getBBox().width > availableLegendSpace) {
-                    gLabels.selectAll('text').each(function(d) {
+                    gLegend.selectAll('g:not(.hidden) > text').each(function(d) {
                         var d3Self = d3.select(this),
                             text = d3.select(this).text();
-                        while (this.getBBox().width > availableLegendTextWidth) {
+                        while (text.length > 0 && this.getBBox().width > availableLegendTextWidth) {
                             text = text.substring(0, text.length - 1);
                             d3Self.text(text + '...');
                         }

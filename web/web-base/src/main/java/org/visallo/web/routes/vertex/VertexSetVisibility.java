@@ -19,9 +19,10 @@ import org.visallo.core.util.ClientApiConverter;
 import org.visallo.core.util.SandboxStatusUtil;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
-import org.visallo.web.BadRequestException;
 import org.visallo.web.clientapi.model.ClientApiElement;
 import org.visallo.web.parameterProviders.ActiveWorkspaceId;
+import org.visallo.web.parameterProviders.SourceGuid;
+import org.visallo.web.util.VisibilityValidator;
 
 import java.util.ResourceBundle;
 
@@ -53,22 +54,20 @@ public class VertexSetVisibility implements ParameterizedHandler {
             @Required(name = "graphVertexId") String graphVertexId,
             @Required(name = "visibilitySource") String visibilitySource,
             @ActiveWorkspaceId String workspaceId,
+            @SourceGuid String sourceGuid,
             ResourceBundle resourceBundle,
             User user,
             Authorizations authorizations
     ) throws Exception {
-        if (!graph.isVisibilityValid(visibilityTranslator.toVisibility(visibilitySource).getVisibility(), authorizations)) {
-            LOGGER.warn("%s is not a valid visibility for %s user", visibilitySource, user.getDisplayName());
-            throw new BadRequestException("visibilitySource", resourceBundle.getString("visibility.invalid"));
-        }
-
-        // add the vertex to the workspace so that the changes show up in the diff panel
-        workspaceRepository.updateEntityOnWorkspace(workspaceId, graphVertexId, null, null, user);
+        VisibilityValidator.validate(graph, visibilityTranslator, resourceBundle, visibilitySource, user, authorizations);
 
         Vertex graphVertex = graph.getVertex(graphVertexId, authorizations);
         if (graphVertex == null) {
             throw new VisalloResourceNotFoundException("Could not find vertex: " + graphVertexId);
         }
+
+        // add the vertex to the workspace so that the changes show up in the diff panel
+        workspaceRepository.updateEntityOnWorkspace(workspaceId, graphVertexId, user);
 
         LOGGER.info("changing vertex (%s) visibility source to %s", graphVertex.getId(), visibilitySource);
 
@@ -90,6 +89,10 @@ public class VertexSetVisibility implements ParameterizedHandler {
                 visibilitySource,
                 Priority.HIGH
         );
+
+//        Workspace workspace = workspaceRepository.findById(workspaceId, user);
+//        ClientApiWorkspace clientApiWorkspace = workspaceRepository.toClientApi(workspace, user, authorizations);
+//        workQueueRepository.pushWorkspaceChange(clientApiWorkspace, clientApiWorkspace.getUsers(), user.getUserId(), sourceGuid);
 
         return ClientApiConverter.toClientApi(graphVertex, workspaceId, authorizations);
     }

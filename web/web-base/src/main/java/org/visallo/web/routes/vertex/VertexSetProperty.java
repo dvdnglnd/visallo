@@ -6,17 +6,18 @@ import com.v5analytics.webster.ParameterizedHandler;
 import com.v5analytics.webster.annotations.Handle;
 import com.v5analytics.webster.annotations.Optional;
 import com.v5analytics.webster.annotations.Required;
-import org.vertexium.*;
-import org.visallo.core.exception.VisalloAccessDeniedException;
+import org.vertexium.Authorizations;
+import org.vertexium.Graph;
+import org.vertexium.Metadata;
+import org.vertexium.Vertex;
+import org.visallo.core.config.Configuration;
 import org.visallo.core.exception.VisalloException;
 import org.visallo.core.model.graph.GraphRepository;
 import org.visallo.core.model.graph.VisibilityAndElementMutation;
 import org.visallo.core.model.ontology.OntologyProperty;
 import org.visallo.core.model.ontology.OntologyRepository;
-import org.visallo.core.model.properties.VisalloProperties;
 import org.visallo.core.model.workQueue.Priority;
 import org.visallo.core.model.workQueue.WorkQueueRepository;
-import org.visallo.core.model.workspace.Workspace;
 import org.visallo.core.model.workspace.WorkspaceRepository;
 import org.visallo.core.security.ACLProvider;
 import org.visallo.core.security.VisibilityTranslator;
@@ -25,29 +26,27 @@ import org.visallo.core.util.ClientApiConverter;
 import org.visallo.core.util.VertexiumMetadataUtil;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
-import org.visallo.web.BadRequestException;
 import org.visallo.web.clientapi.model.ClientApiElement;
 import org.visallo.web.clientapi.model.ClientApiSourceInfo;
 import org.visallo.web.parameterProviders.ActiveWorkspaceId;
 import org.visallo.web.parameterProviders.JustificationText;
+import org.visallo.web.routes.SetPropertyBase;
+import org.visallo.web.util.VisibilityValidator;
 
 import javax.servlet.http.HttpServletRequest;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 import java.util.ResourceBundle;
 
-public class VertexSetProperty implements ParameterizedHandler {
+public class VertexSetProperty extends SetPropertyBase implements ParameterizedHandler {
     private static final VisalloLogger LOGGER = VisalloLoggerFactory.getLogger(VertexSetProperty.class);
 
-    private final Graph graph;
     private final OntologyRepository ontologyRepository;
-    private final VisibilityTranslator visibilityTranslator;
     private final WorkspaceRepository workspaceRepository;
     private final WorkQueueRepository workQueueRepository;
     private final GraphRepository graphRepository;
     private final ACLProvider aclProvider;
+    private final boolean autoPublishComments;
 
     @Inject
     public VertexSetProperty(
@@ -57,15 +56,19 @@ public class VertexSetProperty implements ParameterizedHandler {
             final WorkspaceRepository workspaceRepository,
             final WorkQueueRepository workQueueRepository,
             final GraphRepository graphRepository,
-            final ACLProvider aclProvider
+            final ACLProvider aclProvider,
+            final Configuration configuration
     ) {
+        super(graph, visibilityTranslator);
         this.ontologyRepository = ontologyRepository;
-        this.graph = graph;
-        this.visibilityTranslator = visibilityTranslator;
         this.workspaceRepository = workspaceRepository;
         this.workQueueRepository = workQueueRepository;
         this.graphRepository = graphRepository;
         this.aclProvider = aclProvider;
+        this.autoPublishComments = configuration.getBoolean(
+                Configuration.COMMENTS_AUTO_PUBLISH,
+                Configuration.DEFAULT_COMMENTS_AUTO_PUBLISH
+        );
     }
 
     @Handle
@@ -86,40 +89,31 @@ public class VertexSetProperty implements ParameterizedHandler {
             User user,
             Authorizations authorizations
     ) throws Exception {
-        boolean isComment = VisalloProperties.COMMENT.getPropertyName().equals(propertyName);
-
         if (valueStr == null && valuesStr == null) {
             throw new VisalloException("Parameter: 'value' or 'value[]' is required in the request");
         }
 
-        if (!graph.isVisibilityValid(visibilityTranslator.toVisibility(visibilitySource).getVisibility(), authorizations)) {
-            LOGGER.warn("%s is not a valid visibility for %s user", visibilitySource, user.getDisplayName());
-            throw new BadRequestException("visibilitySource", resourceBundle.getString("visibility.invalid"));
-        }
+        VisibilityValidator.validate(graph, visibilityTranslator, resourceBundle, visibilitySource, user, authorizations);
+        checkRoutePath("vertex", propertyName, request);
 
-        if (isComment && request.getPathInfo().equals("/vertex/property")) {
-            throw new VisalloException("Use /vertex/comment to save comment properties");
-        } else if (request.getPathInfo().equals("/vertex/comment") && !isComment) {
-            throw new VisalloException("Use /vertex/property to save non-comment properties");
+        boolean isComment = isCommentProperty(propertyName);
+        boolean autoPublish = isComment && autoPublishComments;
+        if (autoPublish) {
+            workspaceId = null;
         }
-
-        // add the vertex to the workspace so that the changes show up in the diff panel
-        workspaceRepository.updateEntityOnWorkspace(workspaceId, graphVertexId, null, null, user);
 
         if (propertyKey == null) {
-            propertyKey = isComment ? createCommentPropertyKey() : this.graph.getIdGenerator().nextId();
+            propertyKey = createPropertyKey(propertyName, graph);
         }
 
-        Metadata metadata = VertexiumMetadataUtil.metadataStringToMap(metadataString, this.visibilityTranslator.getDefaultVisibility());
+        Metadata metadata = VertexiumMetadataUtil.metadataStringToMap(metadataString, visibilityTranslator.getDefaultVisibility());
         ClientApiSourceInfo sourceInfo = ClientApiSourceInfo.fromString(sourceInfoString);
-        Vertex graphVertex = graph.getVertex(graphVertexId, authorizations);
+        Vertex vertex = graph.getVertex(graphVertexId, authorizations);
 
-        if (!isComment) {
-            ensureCanUpdate(graphVertex, propertyKey, propertyName, user);
-        }
+        aclProvider.checkCanAddOrUpdateProperty(vertex, propertyKey, propertyName, user);
 
         List<SavePropertyResults> savePropertyResults = saveProperty(
-                graphVertex,
+                vertex,
                 propertyKey,
                 propertyName,
                 valueStr,
@@ -135,13 +129,14 @@ public class VertexSetProperty implements ParameterizedHandler {
         );
         graph.flush();
 
-        Workspace workspace = workspaceRepository.findById(workspaceId, user);
-
-        this.workspaceRepository.updateEntityOnWorkspace(workspace, graphVertex.getId(), null, null, user);
+        if (!autoPublish) {
+            // add the vertex to the workspace so that the changes show up in the diff panel
+            workspaceRepository.updateEntityOnWorkspace(workspaceId, vertex.getId(), user);
+        }
 
         for (SavePropertyResults savePropertyResult : savePropertyResults) {
-            this.workQueueRepository.pushGraphPropertyQueue(
-                    graphVertex,
+            workQueueRepository.pushGraphPropertyQueue(
+                    vertex,
                     savePropertyResult.getPropertyKey(),
                     savePropertyResult.getPropertyName(),
                     workspaceId,
@@ -151,14 +146,14 @@ public class VertexSetProperty implements ParameterizedHandler {
         }
 
         if (sourceInfo != null) {
-            this.workQueueRepository.pushTextUpdated(sourceInfo.vertexId);
+            workQueueRepository.pushTextUpdated(sourceInfo.vertexId);
         }
 
-        return ClientApiConverter.toClientApi(graphVertex, workspaceId, authorizations);
+        return ClientApiConverter.toClientApi(vertex, workspaceId, authorizations);
     }
 
     private List<SavePropertyResults> saveProperty(
-            Vertex graphVertex,
+            Vertex vertex,
             String propertyKey,
             String propertyName,
             String valueStr,
@@ -181,13 +176,10 @@ public class VertexSetProperty implements ParameterizedHandler {
         }
 
         Object value;
-        if (propertyName.equals(VisalloProperties.COMMENT.getPropertyName())) {
+        if (isCommentProperty(propertyName)) {
             value = valueStr;
         } else {
-            OntologyProperty property = ontologyRepository.getPropertyByIRI(propertyName);
-            if (property == null) {
-                throw new RuntimeException("Could not find property: " + propertyName);
-            }
+            OntologyProperty property = ontologyRepository.getRequiredPropertyByIRI(propertyName);
 
             if (property.hasDependentPropertyIris()) {
                 if (valuesStr == null) {
@@ -201,7 +193,7 @@ public class VertexSetProperty implements ParameterizedHandler {
                 List<SavePropertyResults> results = new ArrayList<>();
                 for (String dependentPropertyIri : property.getDependentPropertyIris()) {
                     results.addAll(saveProperty(
-                            graphVertex,
+                            vertex,
                             propertyKey,
                             dependentPropertyIri,
                             valuesStr[valuesIndex++],
@@ -234,7 +226,7 @@ public class VertexSetProperty implements ParameterizedHandler {
         }
 
         VisibilityAndElementMutation<Vertex> setPropertyResult = graphRepository.setProperty(
-                graphVertex,
+                vertex,
                 propertyName,
                 propertyKey,
                 value,
@@ -249,18 +241,6 @@ public class VertexSetProperty implements ParameterizedHandler {
         );
         Vertex save = setPropertyResult.elementMutation.save(authorizations);
         return Lists.newArrayList(new SavePropertyResults(save, propertyKey, propertyName));
-    }
-
-    private String createCommentPropertyKey() {
-        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
-        return dateFormat.format(new Date());
-    }
-
-    private void ensureCanUpdate(Vertex vertex, String propertyKey, String propertyName, User user) {
-        if (!aclProvider.canAddOrUpdateProperty(vertex, propertyKey, propertyName, user)) {
-            throw new VisalloAccessDeniedException(propertyName + " cannot be set due to ACL restriction", user,
-                    vertex.getId());
-        }
     }
 
     private static class SavePropertyResults {

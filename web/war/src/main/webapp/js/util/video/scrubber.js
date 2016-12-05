@@ -10,9 +10,10 @@ define([
 
     var NUMBER_FRAMES = 0, // Populated by config
         POSTER = 1,
-        FRAMES = 2;
+        FRAMES = 2,
+        MAX_DIMENSIONS = [450, 300];
 
-    videojs.options.flash.swf = '../libs/video.js/dist/video-js/video-js.swf';
+    videojs.options.flash.swf = '../libs/video.js/dist/video-js.swf';
 
     return defineComponent(VideoScrubber, withDataRequest);
 
@@ -35,6 +36,7 @@ define([
 
         this.after('initialize', function() {
             this.$node
+                .addClass('org-visallo-video-scrubber')
                 .toggleClass('disableScrubbing', true)
                 .toggleClass('allowPlayback', false);
 
@@ -55,20 +57,24 @@ define([
                 .catch(function(e) {
                     throw e;
                 })
+
+            this.on('seekToTime', this.onSeekToTime);
         });
 
         this.getVideoDimensions = function() {
             var dim = this.attr.videoDimensions;
             if (!dim || isNaN(dim[0]) || isNaN(dim[1])) {
-                this.attr.videoDimensions = dim = [360, 240];
+                this.attr.videoDimensions = dim = [MAX_DIMENSIONS[0], MAX_DIMENSIONS[1]]
             }
             return dim;
         };
 
         this.updateCss = function(applyTemplate) {
+            if (this.videoStarted) return;
+
             var dim = this.posterFrameDimensions,
-                maxHeight = dim[1] > dim[0] ? 360 : 240,
-                dimContainer = [this.$node.width(), Math.min(dim[1], maxHeight)],
+                maxHeight = dim[1] > dim[0] ? MAX_DIMENSIONS[0] : MAX_DIMENSIONS[1],
+                dimContainer = [Math.min(this.$node.width(), 360), Math.min(dim[1], maxHeight)],
                 ratioImage = dim[0] / dim[1],
                 ratioContainer = dimContainer[0] / dimContainer[1],
                 scaled = (
@@ -144,7 +150,6 @@ define([
                 this.off('click');
             });
             this.on('click', this.onClick);
-            this.on('seekToTime', this.onSeekToTime);
 
             this.loadVideoPreview()
                 .then(function(previewDimensions) {
@@ -180,6 +185,9 @@ define([
                         })
                 })
                 .catch(function() { })
+                .then(function() {
+                    self.setup = true;
+                })
         };
 
         this.loadPosterFrame = function() {
@@ -202,7 +210,7 @@ define([
                 });
             }
 
-            return Promise.reject();
+            return Promise.reject(new Error('Expected url to be defined.'));
         }
 
         this.setVideoPreviewBackgroundImage = function() {
@@ -282,7 +290,8 @@ define([
             var self = this,
                 options = opts || {},
                 $video = this.select('videoSelector'),
-                videoPlayer = $video.length && $video[0];
+                videoPlayer = $video.length && $video[0],
+                autoPlay = opts ? opts.autoPlay === undefined || opts.autoPlay : true;
 
             this.videoStarted = true;
             this.$node.css('height', 'auto');
@@ -294,7 +303,11 @@ define([
                             options.seek ? options.seek : 0.0
                        ) - 1.0
                 );
-                videoPlayer.play();
+                if (autoPlay) {
+                    videoPlayer.play();
+                } else {
+                    videoPlayer.pause();
+                }
             } else {
                 var players = videojs.players,
                     video = $(videoTemplate(
@@ -320,48 +333,56 @@ define([
 
                 this.trigger('videoPlayerInitialized');
 
-                _.defer(videojs, video[0], {
-                    controls: true,
-                    autoplay: true,
-                    preload: 'auto'
-                }, function() {
-                    /*eslint consistent-this:0*/
-                    var $videoel = this;
+                _.defer(function() {
+                    videojs(video[0], {
+                        controls: true,
+                        autoplay: true,
+                        preload: 'auto'
+                    }, function() {
+                        /*eslint consistent-this:0*/
+                        var $videoel = this;
 
-                    if (options.seek || options.percentSeek) {
-                        $videoel.on('durationchange', durationchange);
-                        $videoel.on('loadedmetadata', durationchange);
-                    }
-                    $videoel.on('timeupdate', timeupdate);
-
-                    function timeupdate(event) {
-                        self.trigger('playerTimeUpdate', {
-                            currentTime: $videoel.currentTime(),
-                            duration: $videoel.duration()
-                        });
-                    }
-
-                    function durationchange(event) {
-                        var duration = $videoel.duration();
-                        if (duration > 0.0) {
-                            $videoel.off('durationchange', durationchange);
-                            $videoel.off('loadedmetadata', durationchange);
-                            $videoel.currentTime(
-                                Math.max(0.0,
-                                    (options.percentSeek ?
-                                        duration * self.scrubPercent :
-                                        options.seek) - 1.0
-                                )
-                            );
+                        if (options.seek || options.percentSeek) {
+                            $videoel.on('durationchange', durationchange);
+                            $videoel.on('loadedmetadata', durationchange);
                         }
+                        $videoel.on('timeupdate', timeupdate);
+
+                        function timeupdate(event) {
+                            self.trigger('playerTimeUpdate', {
+                                currentTime: $videoel.currentTime(),
+                                duration: $videoel.duration()
+                            });
+                        }
+
+                        function durationchange(event) {
+                            var duration = $videoel.duration();
+                            if (duration > 0.0) {
+                                $videoel.off('durationchange', durationchange);
+                                $videoel.off('loadedmetadata', durationchange);
+                                $videoel.currentTime(
+                                    Math.max(0.0,
+                                        (options.percentSeek ?
+                                            duration * self.scrubPercent :
+                                            options.seek) - 1.0
+                                    )
+                                );
+                            }
+                        }
+                    });
+
+                    if (!autoPlay) {
+                        setTimeout(function() {video[0].pause(); }, 100);
                     }
                 });
             }
         };
 
         this.onSeekToTime = function(event, data) {
+            if (!this.setup) this.setupVideo();
             this.startVideo({
-                seek: data.seekTo / 1000
+                seek: data.seekTo / 1000,
+                autoPlay: data.autoPlay
             });
         };
 

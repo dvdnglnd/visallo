@@ -3,6 +3,7 @@ package org.visallo.web;
 import org.slf4j.MDC;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
+import org.visallo.web.util.RemoteAddressUtil;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
@@ -13,6 +14,7 @@ public class CurrentUser {
     public static final String STRING_ATTRIBUTE_NAME = "username";
     private static final String MDC_USER_ID = "userId";
     private static final String MDC_USER_NAME = "userName";
+    private static final String MDC_CLIENT_IP_ADDRESS = "clientIpAddress";
 
     public static void set(HttpServletRequest request, String userId, String userName) {
         request.getSession().setAttribute(CurrentUser.SESSIONUSER_ATTRIBUTE_NAME, new SessionUser(userId));
@@ -33,7 +35,12 @@ public class CurrentUser {
             LOGGER.debug("session is null");
             return null;
         }
-        return (SessionUser) session.getAttribute(CurrentUser.SESSIONUSER_ATTRIBUTE_NAME);
+        try {
+            return (SessionUser) session.getAttribute(CurrentUser.SESSIONUSER_ATTRIBUTE_NAME);
+        } catch (IllegalStateException e) {
+            LOGGER.debug("Session has expired. Cannot read attributes.");
+            return null;
+        }
     }
 
     private static String getSessionUserName(HttpSession session) {
@@ -56,6 +63,7 @@ public class CurrentUser {
     public static void clearUserFromLogMappedDiagnosticContexts() {
         MDC.remove(MDC_USER_ID);
         MDC.remove(MDC_USER_NAME);
+        MDC.remove(MDC_CLIENT_IP_ADDRESS);
     }
 
     public static void setUserInLogMappedDiagnosticContexts(HttpServletRequest request) {
@@ -67,5 +75,7 @@ public class CurrentUser {
         if (userName != null) {
             MDC.put(MDC_USER_NAME, userName);
         }
+
+        MDC.put(MDC_CLIENT_IP_ADDRESS, RemoteAddressUtil.getClientIpAddr(request));
     }
 }

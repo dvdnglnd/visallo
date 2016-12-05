@@ -1,12 +1,12 @@
 package org.visallo.core.config;
 
 import com.google.common.base.Throwables;
+import org.apache.log4j.xml.DOMConfigurator;
+import org.json.JSONObject;
 import org.visallo.core.exception.VisalloException;
 import org.visallo.core.exception.VisalloResourceNotFoundException;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
-import org.apache.log4j.xml.DOMConfigurator;
-import org.json.JSONObject;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
@@ -16,7 +16,6 @@ import java.util.Map;
 
 public abstract class ConfigurationLoader {
     public static final String ENV_CONFIGURATION_LOADER = "VISALLO_CONFIGURATION_LOADER";
-    protected static ConfigurationLoader configurationLoader;
     private static Configuration configuration;
     private final Map initParameters;
     private JSONObject configurationInfo = new JSONObject();
@@ -26,7 +25,7 @@ public abstract class ConfigurationLoader {
     }
 
     public static void configureLog4j() {
-        ConfigurationLoader configurationLoader = getOrCreateConfigurationLoader();
+        ConfigurationLoader configurationLoader = createConfigurationLoader();
         configurationLoader.doConfigureLog4j();
     }
 
@@ -71,22 +70,31 @@ public abstract class ConfigurationLoader {
     }
 
     public static Configuration load(Class configLoader, Map initParameters) {
-        ConfigurationLoader configurationLoader = getOrCreateConfigurationLoader(configLoader, initParameters);
+        ConfigurationLoader configurationLoader = createConfigurationLoader(configLoader, initParameters);
         if (configuration == null) {
             configuration = configurationLoader.createConfiguration();
         }
+
+        // This load method overload is at the bottom of the call hierarchy and is the only place guaranteed
+        // to get called while loading configuration. It is also early enough in the startup process (ie before
+        // SSL connection to databases or data stores are made) to set system properties and have them take effect.
+        setSystemProperties(configuration);
+
         return configuration;
     }
 
-    private static ConfigurationLoader getOrCreateConfigurationLoader() {
-        return getOrCreateConfigurationLoader(null, null);
+    private static void setSystemProperties(Configuration configuration) {
+        Map<String, String> systemProperties = configuration.getSubset("systemProperty");
+        for (Map.Entry<String, String> systemProperty : systemProperties.entrySet()) {
+            System.setProperty(systemProperty.getKey(), systemProperty.getValue());
+        }
     }
 
-    private static ConfigurationLoader getOrCreateConfigurationLoader(Class configLoaderClass, Map initParameters) {
-        if (configurationLoader != null) {
-            return configurationLoader;
-        }
+    private static ConfigurationLoader createConfigurationLoader() {
+        return createConfigurationLoader(null, null);
+    }
 
+    private static ConfigurationLoader createConfigurationLoader(Class configLoaderClass, Map initParameters) {
         if (configLoaderClass == null) {
             configLoaderClass = getConfigurationLoaderClass();
         }
@@ -96,11 +104,10 @@ public abstract class ConfigurationLoader {
 
         try {
             @SuppressWarnings("unchecked") Constructor constructor = configLoaderClass.getConstructor(Map.class);
-            configurationLoader = (ConfigurationLoader) constructor.newInstance(initParameters);
+            return (ConfigurationLoader) constructor.newInstance(initParameters);
         } catch (Exception e) {
             throw new VisalloException("Could not load configuration class: " + configLoaderClass.getName(), e);
         }
-        return configurationLoader;
     }
 
     public abstract Configuration createConfiguration();
@@ -117,6 +124,7 @@ public abstract class ConfigurationLoader {
             try {
                 String fileName = System.getProperty("logQuiet") == null ? "log4j.xml" : "log4j-quiet.xml";
                 URL log4jResource = getClass().getResource(fileName);
+                System.err.println("Could not resolve log4j.xml, using the fallback: " + log4jResource);
                 if (log4jResource != null) {
                     DOMConfigurator.configure(log4jResource);
                     log4jLocation = log4jResource.toExternalForm();

@@ -74,7 +74,9 @@ public class ClientApiWorkspaceDiff implements ClientApiObject {
             super("EdgeDiffItem", SandboxStatus.PRIVATE, false);
         }
 
-        public EdgeItem(String edgeId, String label, String outVertexId, String inVertexId, JsonNode visibilityJson, SandboxStatus sandboxStatus, boolean deleted) {
+        public EdgeItem(
+                String edgeId, String label, String outVertexId, String inVertexId, JsonNode visibilityJson,
+                SandboxStatus sandboxStatus, boolean deleted) {
             super("EdgeDiffItem", sandboxStatus, deleted);
             this.edgeId = edgeId;
             this.label = label;
@@ -107,7 +109,6 @@ public class ClientApiWorkspaceDiff implements ClientApiObject {
     public static class VertexItem extends Item {
         private String vertexId;
         private JsonNode visibilityJson;
-        private boolean visible;
         private String title;
         private String conceptType;
 
@@ -121,13 +122,11 @@ public class ClientApiWorkspaceDiff implements ClientApiObject {
                 String conceptType,
                 JsonNode visibilityJson,
                 SandboxStatus sandboxStatus,
-                boolean deleted,
-                boolean visible
+                boolean deleted
         ) {
             super("VertexDiffItem", sandboxStatus, deleted);
             this.vertexId = vertexId;
             this.visibilityJson = visibilityJson;
-            this.visible = visible;
             this.title = title;
             this.conceptType = conceptType;
         }
@@ -138,10 +137,6 @@ public class ClientApiWorkspaceDiff implements ClientApiObject {
 
         public JsonNode getVisibilityJson() {
             return visibilityJson;
-        }
-
-        public boolean isVisible() {
-            return visible;
         }
 
         public String getTitle() {
@@ -170,7 +165,9 @@ public class ClientApiWorkspaceDiff implements ClientApiObject {
             super("PropertyDiffItem", SandboxStatus.PRIVATE, false);
         }
 
-        public PropertyItem(String elementType, String elementId, String elementConcept, String name, String key, JsonNode oldData, JsonNode newData, SandboxStatus sandboxStatus, boolean deleted, String visibilityString) {
+        public PropertyItem(
+                String elementType, String elementId, String elementConcept, String name, String key, JsonNode oldData,
+                JsonNode newData, SandboxStatus sandboxStatus, boolean deleted, String visibilityString) {
             super("PropertyDiffItem", sandboxStatus, deleted);
             this.elementType = elementType;
             this.elementId = elementId;

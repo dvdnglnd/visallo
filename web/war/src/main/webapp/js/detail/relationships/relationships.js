@@ -21,7 +21,8 @@ define([
     function Relationships() {
 
         this.defaultAttrs({
-            relationshipsHeaderSelector: '.relationships section.collapsible h1',
+            relationshipsHeaderSelector: 'section.collapsible h1',
+            relationshipsSearchRelatedSelector: 'section.collapsible .search-related',
             relationshipsPagingButtonsSelector: 'section.collapsible .paging button'
         });
 
@@ -30,23 +31,33 @@ define([
 
             this.on('click', {
                 relationshipsHeaderSelector: this.onToggleRelationships,
+                relationshipsSearchRelatedSelector: this.onSearchRelated,
                 relationshipsPagingButtonsSelector: this.onPageRelationships
             });
-            this.on(document, 'verticesUpdated', this.onVerticesUpdated);
+
+            this.data = this.attr.data;
+            this.on('updateModel', function(event, data) {
+                this.data = data.model;
+                this.update();
+            });
 
             this.update();
         });
 
         this.onVerticesUpdated = function(event, data) {
-            var matching = _.findWhere(data.vertices, { id: this.attr.data.id });
+            var matching = _.findWhere(data.vertices, { id: this.data.id });
 
             if (matching) {
-                this.attr.data = matching;
+                this.data = matching;
                 this.update();
             }
         };
 
         this.onToggleRelationships = function(event) {
+            if ($(event.target).hasClass('search-related')) {
+                return;
+            }
+
             var $section = $(event.target).closest('.collapsible');
 
             if ($section.hasClass('expanded')) {
@@ -59,6 +70,16 @@ define([
             }));
         };
 
+        this.onSearchRelated = function(event) {
+            var $target = $(event.target),
+                $section = $target.closest('section');
+
+            this.trigger(document, 'searchByRelatedEntity', {
+                vertexIds: [this.data.id],
+                edgeLabel: $section.data('label')
+            });
+        };
+
         this.requestRelationships = function($section) {
             var self = this,
                 $content = $section.children('div'),
@@ -67,7 +88,7 @@ define([
 
             $badge.addClass('loading');
 
-            this.dataRequest('vertex', 'edges', this.attr.data.id, {
+            this.dataRequest('vertex', 'edges', this.data.id, {
                 offset: paging.offset,
                 size: paging.size,
                 edgeLabel: $section.data('label')
@@ -86,7 +107,8 @@ define([
                         return;
                     }
 
-                    var node = $content.empty().append('<div>').find('div');
+                    var node = $content.empty()
+                        .append('<div>').find('div');
 
                     node.teardownComponent(ElementList);
                     ElementList.attachTo(node, {
@@ -154,7 +176,7 @@ define([
                 MAX_RELATIONS_TO_DISPLAY = parseInt(config['vertex.relationships.maxPerSection'], 10);
 
                 var hasEntityLabel = config['ontology.intent.relationship.artifactHasEntity'],
-                    relations = _.map(self.attr.data.edgeLabels, function(label) {
+                    relations = _.map(self.data.edgeLabels, function(label) {
                         var relation = {
                                 label: label,
                                 displayName: label
@@ -183,6 +205,11 @@ define([
                                 this.append('h1')
                                     .call(function() {
                                         this.append('strong');
+                                        if (!visalloData.isFullscreen) {
+                                            this.append('s')
+                                                .attr('class', 'search-related')
+                                                .attr('title', i18n('detail.entity.relationships.open_in_search'));
+                                        }
                                         this.append('span').attr('class', 'badge');
                                     });
                                 this.append('div');

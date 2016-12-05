@@ -13,6 +13,7 @@ import org.vertexium.inmemory.InMemoryAuthorizations;
 import org.vertexium.util.ConvertingIterable;
 import org.visallo.core.config.Configuration;
 import org.visallo.core.exception.VisalloException;
+import org.visallo.core.model.lock.LockRepository;
 import org.visallo.core.model.ontology.*;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
@@ -32,31 +33,59 @@ public class InMemoryOntologyRepository extends OntologyRepositoryBase {
     private final Map<String, InMemoryOntologyProperty> propertiesCache = new HashMap<>();
     private final Map<String, InMemoryRelationship> relationshipsCache = new HashMap<>();
     private final List<OwlData> fileCache = new ArrayList<>();
+    private Authorizations authorizations;
 
     @Inject
     public InMemoryOntologyRepository(
             final Graph graph,
-            final Configuration configuration
+            final Configuration configuration,
+            final LockRepository lockRepository
     ) throws Exception {
-        super(configuration);
+        super(configuration, lockRepository);
         this.graph = graph;
 
         clearCache();
-        Authorizations authorizations = new InMemoryAuthorizations(VISIBILITY_STRING);
+        this.authorizations = new InMemoryAuthorizations(VISIBILITY_STRING);
         owlConfig.setMissingImportHandlingStrategy(MissingImportHandlingStrategy.SILENT);
 
         loadOntologies(getConfiguration(), authorizations);
     }
 
     @Override
-    protected Concept importOntologyClass(OWLOntology o, OWLClass ontologyClass, File inDir, Authorizations authorizations) throws IOException {
+    protected Concept importOntologyClass(
+            OWLOntology o,
+            OWLClass ontologyClass,
+            File inDir,
+            Authorizations authorizations
+    ) throws IOException {
         InMemoryConcept concept = (InMemoryConcept) super.importOntologyClass(o, ontologyClass, inDir, authorizations);
         conceptsCache.put(concept.getIRI(), concept);
         return concept;
     }
 
     @Override
-    protected void setIconProperty(Concept concept, File inDir, String glyphIconFileName, String propertyKey, Authorizations authorizations) throws IOException {
+    protected Relationship importObjectProperty(
+            OWLOntology o,
+            OWLObjectProperty objectProperty,
+            Authorizations authorizations
+    ) {
+        InMemoryRelationship relationship = (InMemoryRelationship) super.importObjectProperty(
+                o,
+                objectProperty,
+                authorizations
+        );
+        relationshipsCache.put(relationship.getIRI(), relationship);
+        return relationship;
+    }
+
+    @Override
+    protected void setIconProperty(
+            Concept concept,
+            File inDir,
+            String glyphIconFileName,
+            String propertyKey,
+            Authorizations authorizations
+    ) throws IOException {
         if (glyphIconFileName == null) {
             concept.setProperty(propertyKey, null, authorizations);
         } else {
@@ -83,7 +112,9 @@ public class InMemoryOntologyRepository extends OntologyRepositoryBase {
     protected void storeOntologyFile(InputStream inputStream, IRI documentIRI) {
         try {
             byte[] inFileData = IOUtils.toByteArray(inputStream);
-            fileCache.add(new OwlData(documentIRI.toString(), inFileData));
+            synchronized (fileCache) {
+                fileCache.add(new OwlData(documentIRI.toString(), inFileData));
+            }
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -91,12 +122,14 @@ public class InMemoryOntologyRepository extends OntologyRepositoryBase {
 
     @Override
     public boolean isOntologyDefined(String iri) {
-        for (OwlData owlData : fileCache) {
-            if (owlData.iri.equals(iri)) {
-                return true;
+        synchronized (fileCache) {
+            for (OwlData owlData : fileCache) {
+                if (owlData.iri.equals(iri)) {
+                    return true;
+                }
             }
+            return false;
         }
-        return false;
     }
 
     @Override
@@ -106,9 +139,17 @@ public class InMemoryOntologyRepository extends OntologyRepositoryBase {
     }
 
     @Override
-    protected List<OWLOntology> loadOntologyFiles(OWLOntologyManager m, OWLOntologyLoaderConfiguration config, IRI excludedIRI) throws Exception {
+    protected List<OWLOntology> loadOntologyFiles(
+            OWLOntologyManager m,
+            OWLOntologyLoaderConfiguration config,
+            IRI excludedIRI
+    ) throws Exception {
         List<OWLOntology> loadedOntologies = new ArrayList<>();
-        for (OwlData owlData : fileCache) {
+        List<OwlData> fileCacheCopy;
+        synchronized (fileCache) {
+            fileCacheCopy = ImmutableList.copyOf(fileCache);
+        }
+        for (OwlData owlData : fileCacheCopy) {
             IRI visalloBaseOntologyIRI = IRI.create(owlData.iri);
             if (excludedIRI != null && excludedIRI.equals(visalloBaseOntologyIRI)) {
                 continue;
@@ -116,7 +157,10 @@ public class InMemoryOntologyRepository extends OntologyRepositoryBase {
             try (InputStream visalloBaseOntologyIn = new ByteArrayInputStream(owlData.data)) {
                 Reader visalloBaseOntologyReader = new InputStreamReader(visalloBaseOntologyIn);
                 LOGGER.info("Loading existing ontology: %s", owlData.iri);
-                OWLOntologyDocumentSource visalloBaseOntologySource = new ReaderDocumentSource(visalloBaseOntologyReader, visalloBaseOntologyIRI);
+                OWLOntologyDocumentSource visalloBaseOntologySource = new ReaderDocumentSource(
+                        visalloBaseOntologyReader,
+                        visalloBaseOntologyIRI
+                );
                 OWLOntology o = m.loadOntologyFromOntologyDocument(visalloBaseOntologySource, config);
                 loadedOntologies.add(o);
             }
@@ -250,6 +294,11 @@ public class InMemoryOntologyRepository extends OntologyRepositoryBase {
             if (displayName != null && !displayName.trim().isEmpty()) {
                 property.setDisplayName(displayName);
             }
+            if (textIndexHints != null && textIndexHints.size() > 0) {
+                for (TextIndexHint textIndexHint : textIndexHints) {
+                    property.addTextIndexHints(textIndexHint.toString());
+                }
+            }
             property.setPossibleValues(possibleValues);
             propertiesCache.put(propertyIri, property);
         }
@@ -352,6 +401,17 @@ public class InMemoryOntologyRepository extends OntologyRepositoryBase {
 
     @Override
     public Concept getOrCreateConcept(Concept parent, String conceptIRI, String displayName, File inDir) {
+        return getOrCreateConcept(parent, conceptIRI, displayName, inDir, true);
+    }
+
+    @Override
+    public Concept getOrCreateConcept(
+            Concept parent,
+            String conceptIRI,
+            String displayName,
+            File inDir,
+            boolean isDeclaredInOntology
+    ) {
         InMemoryConcept concept = (InMemoryConcept) getConceptByIRI(conceptIRI);
         if (concept != null) {
             return concept;
@@ -373,12 +433,7 @@ public class InMemoryOntologyRepository extends OntologyRepositoryBase {
             Relationship parent,
             Iterable<Concept> domainConcepts,
             Iterable<Concept> rangeConcepts,
-            String relationshipIRI,
-            String displayName,
-            String[] intents,
-            boolean userVisible,
-            boolean deleteable,
-            boolean updateable
+            String relationshipIRI
     ) {
         Relationship relationship = getRelationshipByIRI(relationshipIRI);
         if (relationship != null) {
@@ -404,14 +459,9 @@ public class InMemoryOntologyRepository extends OntologyRepositoryBase {
         InMemoryRelationship inMemRelationship = new InMemoryRelationship(
                 parentIRI,
                 relationshipIRI,
-                displayName,
                 domainConceptIris,
                 rangeConceptIris,
-                properties,
-                intents,
-                userVisible,
-                deleteable,
-                updateable
+                properties
         );
         relationshipsCache.put(relationshipIRI, inMemRelationship);
         return inMemRelationship;

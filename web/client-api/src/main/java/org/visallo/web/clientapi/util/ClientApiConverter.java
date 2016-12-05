@@ -3,6 +3,7 @@ package org.visallo.web.clientapi.util;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.visallo.web.clientapi.model.DirectoryEntity;
 import org.visallo.web.clientapi.model.VisibilityJson;
 
 import java.io.IOException;
@@ -71,14 +72,11 @@ public class ClientApiConverter {
     public static Object fromClientApiValue(Object obj) {
         if (obj instanceof Map) {
             Map map = (Map) obj;
-            if (map.size() == 2 && map.containsKey("source") && map.containsKey("workspaces")) {
-                VisibilityJson visibilityJson = new VisibilityJson();
-                visibilityJson.setSource((String) map.get("source"));
-                List<String> workspaces = (List<String>) map.get("workspaces");
-                for (String workspace : workspaces) {
-                    visibilityJson.addWorkspace(workspace);
-                }
-                return visibilityJson;
+            if (VisibilityJson.isVisibilityJson(map)) {
+                return VisibilityJson.fromMap(map);
+            }
+            if (DirectoryEntity.isEntity(map)) {
+                return DirectoryEntity.fromMap(map);
             }
         }
         return obj;
@@ -93,6 +91,10 @@ public class ClientApiConverter {
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Could not convert object '" + o.getClass().getName() + "' to string", e);
         }
+    }
+
+    public static <T> T toClientApi(JSONObject json, Class<T> clazz) {
+        return toClientApi(json.toString(), clazz);
     }
 
     public static <T> T toClientApi(String str, Class<T> clazz) {

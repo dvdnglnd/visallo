@@ -1,7 +1,5 @@
 package org.visallo.web.clientapi.model;
 
-import org.visallo.web.clientapi.util.StringUtils;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,8 +11,6 @@ public class ClientApiWorkspace implements ClientApiObject {
     private boolean isEditable;
     private boolean isCommentable;
     private List<User> users = new ArrayList<User>();
-    private List<Vertex> vertices = new ArrayList<Vertex>();
-    private boolean active;
 
     public String getWorkspaceId() {
         return workspaceId;
@@ -68,20 +64,8 @@ public class ClientApiWorkspace implements ClientApiObject {
         return users;
     }
 
-    public List<Vertex> getVertices() {
-        return vertices;
-    }
-
     public void addUser(User user) {
         this.users.add(user);
-    }
-
-    public void addVertex(Vertex vertex) {
-        this.vertices.add(vertex);
-    }
-
-    public void removeVertices() {
-        this.vertices = null;
     }
 
     @Override
@@ -92,24 +76,11 @@ public class ClientApiWorkspace implements ClientApiObject {
                 ", createdBy='" + createdBy + '\'' +
                 ", isSharedToUser=" + isSharedToUser +
                 ", isEditable=" + isEditable +
-                ", active=" + active +
-                ", users=" + StringUtils.join(users) +
-                ", vertices=" + StringUtils.join(vertices) +
                 '}';
-    }
-
-    public void setActive(boolean active) {
-        this.active = active;
-    }
-
-    public boolean isActive() {
-        return active;
     }
 
     public static class Vertex {
         private String vertexId;
-        private GraphPosition graphPosition = new GraphPosition();
-        private String graphLayoutJson;
         private boolean visible;
 
         public String getVertexId() {
@@ -120,14 +91,6 @@ public class ClientApiWorkspace implements ClientApiObject {
             this.vertexId = vertexId;
         }
 
-        public GraphPosition getGraphPosition() {
-            return graphPosition;
-        }
-
-        public void setGraphPosition(GraphPosition graphPosition) {
-            this.graphPosition = graphPosition;
-        }
-
         public boolean isVisible() {
             return visible;
         }
@@ -136,19 +99,11 @@ public class ClientApiWorkspace implements ClientApiObject {
             this.visible = visible;
         }
 
-        public String getGraphLayoutJson() {
-            return graphLayoutJson;
-        }
-
-        public void setGraphLayoutJson(String graphLayoutJson) {
-            this.graphLayoutJson = graphLayoutJson;
-        }
-
         @Override
         public String toString() {
             return "Vertex{" +
                     "vertexId='" + vertexId + '\'' +
-                    ", graphPosition=" + graphPosition +
+                    ", visible=" + visible +
                     '}';
         }
     }

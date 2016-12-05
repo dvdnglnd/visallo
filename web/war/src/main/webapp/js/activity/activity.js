@@ -47,7 +47,7 @@ define([
 
     function Activity() {
 
-        this.defaultAttrs({
+        this.attributes({
             typesSelector: '.types',
             deleteButtonSelector: 'button.delete',
             cancelButtonSelector: 'button.cancel',
@@ -70,7 +70,8 @@ define([
                 'Custom activity rows based on events or long running processes.',
                 function(e) {
                     return ('type' in e) && ('kind' in e);
-                }
+                },
+                'http://docs.visallo.org/extension-points/front-end/activity'
             );
 
             builtinHandlers.forEach(function(h) {
@@ -184,6 +185,16 @@ define([
         this.removeTask = function(taskId) {
             this.removedTasks[taskId] = true;
             var task = this.tasksById[taskId];
+            var handler = handlersByType[task.type];
+
+            if (handler.onRemove) {
+                if (_.isFunction(handler.onRemove)) {
+                    handler.onRemove.call(this);
+                } else {
+                    console.error('handler.onRemove expected a function, instead got: ', handler.onRemove);
+                }
+            }
+
             delete this.tasksById[taskId];
             this.tasks.splice(this.tasks.indexOf(task), 1);
         };
@@ -312,7 +323,11 @@ define([
                 .compact()
                 .value();
 
-            return Promise.require.apply(Promise, uniqueTypes)
+            var promises = _.map(uniqueTypes, function(type) {
+                return Promise.require(type);
+            });
+
+            return Promise.all(promises)
                 .then(function(deps) {
                     self.updateWithDependencies.apply(self, [data, uniqueTypes].concat(deps))
                 })

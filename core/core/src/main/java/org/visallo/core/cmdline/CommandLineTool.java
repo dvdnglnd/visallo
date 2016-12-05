@@ -13,21 +13,27 @@ import org.visallo.core.config.Configuration;
 import org.visallo.core.config.ConfigurationLoader;
 import org.visallo.core.model.lock.LockRepository;
 import org.visallo.core.model.ontology.OntologyRepository;
+import org.visallo.core.model.user.AuthorizationRepository;
+import org.visallo.core.model.user.PrivilegeRepository;
 import org.visallo.core.model.user.UserRepository;
 import org.visallo.core.model.workQueue.WorkQueueRepository;
 import org.visallo.core.security.VisibilityTranslator;
 import org.visallo.core.user.User;
+import org.visallo.core.util.ShutdownService;
 import org.visallo.core.util.VersionUtil;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
 
 public abstract class CommandLineTool {
+    public static final String THREAD_NAME = "Visallo CLI";
     protected VisalloLogger LOGGER;
     public static final boolean DEFAULT_INIT_FRAMEWORK = true;
     private Configuration configuration;
     private boolean willExit = false;
     private UserRepository userRepository;
+    private AuthorizationRepository authorizationRepository;
     private Authorizations authorizations;
+    private PrivilegeRepository privilegeRepository;
     private LockRepository lockRepository;
     private User user;
     private Graph graph;
@@ -35,6 +41,9 @@ public abstract class CommandLineTool {
     private OntologyRepository ontologyRepository;
     private VisibilityTranslator visibilityTranslator;
     private SimpleOrmSession simpleOrmSession;
+    private ShutdownService shutdownService;
+    private JCommander jCommander;
+    private boolean frameworkInitialized;
 
     @Parameter(names = {"--help", "-h"}, description = "Print help", help = true)
     private boolean help;
@@ -47,52 +56,57 @@ public abstract class CommandLineTool {
     }
 
     public int run(String[] args, boolean initFramework) throws Exception {
-        LOGGER = VisalloLoggerFactory.getLogger(CommandLineTool.class, "cli");
-        final Thread mainThread = Thread.currentThread();
-        Runtime.getRuntime().addShutdownHook(new Thread() {
-            @Override
-            public void run() {
-                willExit = true;
-                try {
-                    mainThread.join(1000);
-                } catch (InterruptedException e) {
-                    // nothing useful to do here
+        try {
+            LOGGER = VisalloLoggerFactory.getLogger(CommandLineTool.class, "cli");
+            final Thread mainThread = Thread.currentThread();
+            Runtime.getRuntime().addShutdownHook(new Thread() {
+                @Override
+                public void run() {
+                    willExit = true;
+                    try {
+                        mainThread.join(1000);
+                    } catch (InterruptedException e) {
+                        // nothing useful to do here
+                    }
                 }
-            }
-        });
+            });
 
-        try {
-            JCommander j = parseArguments(args);
-            if (j == null) {
+            try {
+                jCommander = parseArguments(args);
+                if (jCommander == null) {
+                    return -1;
+                }
+                if (help) {
+                    printHelp(jCommander);
+                    return -1;
+                }
+                if (version) {
+                    VersionUtil.printVersion();
+                    return -1;
+                }
+            } catch (ParameterException ex) {
+                System.err.println(ex.getMessage());
                 return -1;
             }
-            if (help) {
-                printHelp(j);
-                return -1;
-            }
-            if (version) {
-                VersionUtil.printVersion();
-                return -1;
-            }
-        } catch (ParameterException ex) {
-            System.err.println(ex.getMessage());
-            return -1;
-        }
 
-        if (initFramework) {
-            InjectHelper.inject(this, VisalloBootstrap.bootstrapModuleMaker(getConfiguration()), getConfiguration());
-        }
+            if (initFramework) {
+                initializeFramework();
+            }
 
-        int result = -1;
-        try {
+            int result = -1;
             result = run();
             LOGGER.debug("command result: %d", result);
+            return result;
         } finally {
-            if (initFramework) {
+            if (frameworkInitialized) {
                 shutdown();
             }
         }
-        return result;
+    }
+
+    protected void initializeFramework() {
+        InjectHelper.inject(this, VisalloBootstrap.bootstrapModuleMaker(getConfiguration()), getConfiguration());
+        frameworkInitialized = true;
     }
 
     protected void printHelp(JCommander j) {
@@ -104,22 +118,7 @@ public abstract class CommandLineTool {
     }
 
     protected void shutdown() {
-        if (this.lockRepository != null) {
-            LOGGER.debug("shutting down %s", this.lockRepository.getClass().getName());
-            this.lockRepository.shutdown();
-        }
-        if (graph != null) {
-            LOGGER.debug("shutting down %s", this.graph.getClass().getName());
-            this.graph.shutdown();
-        }
-        if (this.workQueueRepository != null) {
-            LOGGER.debug("shutting down %s", this.workQueueRepository.getClass().getName());
-            this.workQueueRepository.shutdown();
-        }
-        if (this.simpleOrmSession != null) {
-            LOGGER.debug("shutting down %s", this.simpleOrmSession.getClass().getName());
-            this.simpleOrmSession.close();
-        }
+        getShutdownService().shutdown();
     }
 
     protected abstract int run() throws Exception;
@@ -140,7 +139,7 @@ public abstract class CommandLineTool {
 
     protected Authorizations getAuthorizations() {
         if (this.authorizations == null) {
-            this.authorizations = this.userRepository.getAuthorizations(getUser());
+            this.authorizations = getAuthorizationRepository().getGraphAuthorizations(getUser());
         }
         return this.authorizations;
     }
@@ -157,6 +156,16 @@ public abstract class CommandLineTool {
     @Inject
     public final void setUserRepository(UserRepository userRepository) {
         this.userRepository = userRepository;
+    }
+
+    @Inject
+    public void setAuthorizationRepository(AuthorizationRepository authorizationRepository) {
+        this.authorizationRepository = authorizationRepository;
+    }
+
+    @Inject
+    public void setPrivilegeRepository(PrivilegeRepository privilegeRepository) {
+        this.privilegeRepository = privilegeRepository;
     }
 
     @Inject
@@ -179,6 +188,11 @@ public abstract class CommandLineTool {
         this.simpleOrmSession = simpleOrmSession;
     }
 
+    @Inject
+    public void setShutdownService(ShutdownService shutdownService) {
+        this.shutdownService = shutdownService;
+    }
+
     public SimpleOrmSession getSimpleOrmSession() {
         return simpleOrmSession;
     }
@@ -195,12 +209,24 @@ public abstract class CommandLineTool {
         return userRepository;
     }
 
+    public AuthorizationRepository getAuthorizationRepository() {
+        return authorizationRepository;
+    }
+
+    public PrivilegeRepository getPrivilegeRepository() {
+        return privilegeRepository;
+    }
+
     public OntologyRepository getOntologyRepository() {
         return ontologyRepository;
     }
 
     public VisibilityTranslator getVisibilityTranslator() {
         return visibilityTranslator;
+    }
+
+    public ShutdownService getShutdownService() {
+        return shutdownService;
     }
 
     @Inject
@@ -216,6 +242,7 @@ public abstract class CommandLineTool {
     }
 
     public static void main(CommandLineTool commandLineTool, String[] args) throws Exception {
+        Thread.currentThread().setName(THREAD_NAME);
         main(commandLineTool, args, DEFAULT_INIT_FRAMEWORK);
     }
 }

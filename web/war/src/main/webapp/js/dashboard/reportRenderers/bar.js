@@ -2,11 +2,13 @@ define([
     'flight/lib/component',
     'util/vertex/formatters',
     'util/requirejs/promise!util/service/ontologyPromise',
+    'text!./barCss.css',
     './withRenderer'
 ], function(
     defineComponent,
     F,
     ontology,
+    barCss,
     withRenderer) {
     'use strict';
 
@@ -71,7 +73,6 @@ define([
                 report = this.attr.report;
 
             this.isHistogram = root.type === 'histogram';
-            this.defsIdIncrement = 0;
 
             var buckets = _.sortBy(root.buckets, function(d) {
                     if ('count' in d.value) {
@@ -123,7 +124,9 @@ define([
                 width = $node.width(),
                 height = $node.height() - padding,
                 heightXAxis = 20,
-                xAxisVerticalOffset = (Math.trunc(height - heightXAxis) + 0.5),
+                heightDifference = height - heightXAxis,
+                heightTruncated = heightDifference > 0 ? Math.floor(heightDifference) : Math.ceil(heightDifference),
+                xAxisVerticalOffset = heightTruncated + 0.5,
                 yAxisWidth = 30,
                 report = this.attr.report,
                 numBars = this.isHistogram ? data.length : this.isHorizontal ? height / heightXAxis : MAX_ROWS,
@@ -188,15 +191,18 @@ define([
                             .orient('left')
                             .tickFormat(tickFormat),
                 svg = d3.select(node).selectAll('svg').data([1]).call(function() {
-                        var band = self.isHistogram ? dataScale(self.interval) : dataScale.rangeBand(),
+                        var band = self.isHistogram ? dataScale(dataScale.domain()[0] + self.interval) : dataScale.rangeBand(),
                             clip = { x: band / -2, y: 0, width: band, height: 30 };
                         this.enter()
                             .append('svg')
                             .call(function() {
                                 this.append('defs')
-                                    .append('clipPath').attr('id', 'xAxisLabelClip')
-                                    .append('rect')
-                                    .attr(clip)
+                                    .call(function() {
+                                        this.append('style').attr('type', 'text/css').text(barCss);
+                                        this.append('clipPath').attr('id', 'xAxisLabelClip')
+                                            .append('rect')
+                                            .attr(clip)
+                                    })
                                 this.append('g')
                                     .attr('class', 'padding')
                                     .attr('transform', 'translate(0, ' + padding + ')');
@@ -242,8 +248,16 @@ define([
                                                 d3.select(this)
                                                     .attr('dx', band / -2)
                                                     .style('text-anchor', 'start')
+                                            } else {
+                                                d3.select(this)
+                                                    .attr('dx', null)
                                             }
                                         })
+                                        .each(function() {
+                                            d3.select(this)
+                                                .attr('dy', '.55em')
+                                        })
+                                        .call(overflowEllipsis, dataScale.rangeBand())
                                 }
                             })
                     }),
@@ -293,15 +307,24 @@ define([
                                         });
 
                                     if (self.isHorizontal) {
-                                        var clipPathId = 'clip-path-' + (self.defsIdIncrement++),
-                                            clipPathId2 = 'clip-path2-' + (self.defsIdIncrement++);
+                                        var genClipPath = function(rowPart) {
+                                                return function(d, col, row) {
+                                                    return 'clip-path-' + row + '-' + rowPart;
+                                                }
+                                            },
+                                            genClipPathRef = function(rowPart) {
+                                                return _.compose(function(pathId) {
+                                                    return 'url(#' + pathId + ')';
+                                                }, genClipPath(rowPart))
+                                            }
+
                                         this.append('defs')
                                             .call(function() {
                                                 this.append('clipPath')
-                                                    .attr('id', clipPathId)
+                                                    .attr('id', genClipPath(0))
                                                     .append('rect').attr('class', 'clipRect')
                                                 this.append('clipPath')
-                                                    .attr('id', clipPathId2)
+                                                    .attr('id', genClipPath(1))
                                                     .append('rect').attr('class', 'clipRect2')
                                             })
 
@@ -311,12 +334,12 @@ define([
                                                     .attr('class', 'text-1')
                                                     .attr('x', 5)
                                                     .style({ fill: 'white', opacity: 1 })
-                                                    .attr('clip-path', 'url(#' + clipPathId + ')')
+                                                    .attr('clip-path', genClipPathRef(0))
                                                 this.append('text')
                                                     .attr('class', 'text-2')
                                                     .attr('x', 5)
                                                     .style({ fill: self.colors[0], opacity: 1 })
-                                                    .attr('clip-path', 'url(#' + clipPathId2 + ')')
+                                                    .attr('clip-path', genClipPathRef(1))
                                             })
                                             .transition()
                                             .delay(self.TRANSITION_DURATION - self.TRANSITION_DURATION / 4)
@@ -340,10 +363,11 @@ define([
                         })
                         .map(function(d) {
                             nestedCount += d.value.count;
-                            return _.extend({}, d, {
+                            var bucket = _.extend({}, d, {
                                 y0: y0,
                                 y1: y0 += d.value.count || 0
-                            })
+                            });
+                            return bucket;
                         })
                         .tap(function(buckets) {
                             if (self.isNested) {
@@ -473,7 +497,7 @@ define([
                         var initialDate = dataScale.domain()[0].getTime();
                         return Math.max(1, dataScale(new Date(initialDate + self.interval)) - dataScale(initialDate));
                     } else {
-                        return Math.max(1, dataScale(self.interval))
+                        return Math.max(1, dataScale(dataScale.domain()[0] + self.interval))
                     }
                 } else {
                     return dataScale.rangeBand(d);
@@ -517,6 +541,20 @@ define([
                     return 'translate(0,' + offset + ')';
                 }
                 return 'translate(' + offset + ',0)';
+            }
+
+            function overflowEllipsis(text, width) {
+                text.each(function() {
+                    var textEl = d3.select(this);
+                    var textLength = textEl.node().getComputedTextLength();
+                    var text = textEl.text();
+
+                    while (textLength > width && text.length > 0) {
+                        text = text.slice(0, -1);
+                        textEl.text(text + '...');
+                        textLength = textEl.node().getComputedTextLength();
+                    }
+                });
             }
         };
     }

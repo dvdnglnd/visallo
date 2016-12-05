@@ -22,6 +22,7 @@ define([
         this.after('initialize', function() {
             this.shortcutsByScope = {};
             this.shortcuts = {};
+            this.shortcutsEnabled = true;
             this.focusElementStack = [];
 
             window.visalloKeyboard = {};
@@ -37,15 +38,24 @@ define([
             this.on('keyup', this.onKeyUp);
             this.on('click', this.onClick);
             this.on('mousemove', this.onMouseMove);
-            this.on('didToggleDisplay', this.onToggleDisplay);
             this.on('focusLostByClipboard', this.onFocusLostByClipboard);
             this.on('focusComponent', this.onFocus);
 
             this.on(document, 'requestKeyboardShortcuts', this.onRequestKeyboardShortcuts);
             this.on(document, 'registerKeyboardShortcuts', this.onRegisterKeyboardShortcuts);
+            this.on(document, 'toggleAllShortcuts', function(event, data) {
+                this.shortcutsEnabled = (data && !_.isUndefined(data.enable)) ? data.enable : !this.shortcutsEnabled;
+            });
+            this.on(document, 'toggleShortcutsByScope', this.onToggleShortcutsByScope);
+            this.on(document, 'toggleKeyboardShortcut', this.onToggleKeyboardShortcut);
 
             this.onDocumentMouseDown = this.onDocumentMouseDown.bind(this);
             document.addEventListener('mousedown', this.onDocumentMouseDown, true);
+
+            this.on(document, 'fullscreenchange MSFullscreenChange webkitfullscreenchange mozfullscreenchange', function(e) {
+                var fullscreenElement = document.fullscreenElement || document.msFullscreenElement || document.mozFullScreenElement || document.webkitFullscreenElement;
+                this.shortcutsEnabled = !fullscreenElement;
+            });
         });
 
         this.onDocumentMouseDown = function(event) {
@@ -54,15 +64,6 @@ define([
 
         this.onRequestKeyboardShortcuts = function() {
             this.trigger('keyboardShortcutsRegistered', this.shortcutsByScope);
-        };
-
-        this.onToggleDisplay = function(e, data) {
-            if (!data.visible) return;
-            if (data.name === 'map') {
-                this.pushToStackIfNotLast($('.map-pane').get(0));
-            } else if (data.name === 'graph') {
-                this.pushToStackIfNotLast($('.graph-pane:visible').get(0));
-            }
         };
 
         this.onRegisterKeyboardShortcuts = function(e, data) {
@@ -80,7 +81,7 @@ define([
             require(['util/formatters'], function(F) {
                 scopes.forEach(function(scope) {
                     Object.keys(data.shortcuts).forEach(function(key) {
-                        var shortcut = $.extend({}, data.shortcuts[key], F.object.shortcut(key));
+                        var shortcut = $.extend({}, data.shortcuts[key], F.object.shortcut(key), { enabled: true });
 
                         if (!shortcutsByScope[scope]) shortcutsByScope[scope] = {};
                         shortcuts[shortcut.forEventLookup] = shortcutsByScope[scope][shortcut.normalized] = shortcut;
@@ -119,19 +120,28 @@ define([
                 };
 
             if (keys[w]) {
-                return { preventDefault: false, fire: keys[w] };
+                return { preventDefault: false, fire: keys[w], enabled: true };
             }
-            if ((event.metaKey || event.ctrlKey) && event.altKey) {
-                return this.shortcuts['CTRL-ALT-' + w] || this.shortcuts['META-ALT-' + w];
+            if (event.type === 'keydown') {
+                this.currentMetaKeyState = _.pick(event, 'metaKey', 'ctrlKey', 'shiftKey', 'altKey');
             }
-            if (event.metaKey || event.ctrlKey) {
-                return this.shortcuts['CTRL-' + w] || this.shortcuts['META-' + w];
+            if (this.currentMetaKeyState) {
+                if ((this.currentMetaKeyState.metaKey || this.currentMetaKeyState.ctrlKey) && this.currentMetaKeyState.altKey) {
+                    return this.shortcuts['CTRL-ALT-' + w] || this.shortcuts['META-ALT-' + w];
+                }
+                if (this.currentMetaKeyState.metaKey || this.currentMetaKeyState.ctrlKey) {
+                    return this.shortcuts['CTRL-' + w] || this.shortcuts['META-' + w];
+                }
+                if (this.currentMetaKeyState.altKey) {
+                    return this.shortcuts['ALT-' + w];
+                }
+                if (this.currentMetaKeyState.shiftKey) {
+                    return this.shortcuts['SHIFT-' + w];
+                }
             }
-            if (event.altKey) {
-                return this.shortcuts['ALT-' + w];
-            }
-            if (event.shiftKey) {
-                return this.shortcuts['SHIFT-' + w];
+
+            if (event.type === 'keyup') {
+                this.currentMetaKeyState = null;
             }
 
             return this.shortcuts[w];
@@ -144,7 +154,7 @@ define([
 
             this.lastEventParts = null;
 
-            if (shortcut) {
+            if (shortcut && shortcut.enabled && this.shortcutsEnabled) {
                 var f = this.fireEventUp;
                 if (shortcut.preventDefault !== false) {
                     e.preventDefault();
@@ -220,6 +230,47 @@ define([
             data.pageX = this.mousePageX;
             data.pageY = this.mousePageY;
             this.trigger(te, name, data);
-        }
+        };
+
+        this.onToggleShortcutsByScope = function(event, data) {
+            var self = this;
+
+            Object.keys(data).forEach(function(s) {
+                var scope = self.shortcutsByScope[s];
+
+                if (scope) {
+                    Object.keys(scope).forEach(function(shortcut) {
+                        scope[shortcut].enabled = data[s];
+                    });
+                } else {
+                    console.warn('Could not toggle shortcuts. Scope \'' + s + '\' not found');
+                }
+            });
+        };
+
+        this.onToggleKeyboardShortcut = function(event, data) {
+            var self = this;
+            var shortcut = data.shortcut.toUpperCase();
+
+            if (data.scopes) {
+                data.scopes.forEach(function(scope) {
+                    var registeredShortcut = self.shortcutsByScope[scope][shortcut];
+                    if (registeredShortcut) {
+                        registeredShortcut.enabled = !_.isUndefined(data.enabled) ? data.enabled : !registeredShortcut.enabled;
+                    }
+                });
+            } else {
+                if (this.shortcuts[shortcut]) {
+                    this.shortcuts[shortcut].enabled = !_.isUndefined(data.enabled) ? data.enabled : !this.shortcuts[shortcut].enabled;
+                }
+
+                Object.keys(this.shortcutsByScope).forEach(function(scope) {
+                    var scopedShortcut = self.shortcutsByScope[scope][shortcut];
+                    if (scopedShortcut) {
+                        scopedShortcut.enabled = !_.isUndefined(data.enabled) ? data.enabled : !scopedShortcut.enabled;
+                    }
+                });
+            }
+        };
     }
 });

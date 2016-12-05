@@ -1,7 +1,7 @@
 
 define([
     'flight/lib/component',
-    'tpl!./form',
+    'hbs!./form-tpl',
     'tpl!./shareRow',
     'tpl!./permissions',
     'util/users/userSelect',
@@ -21,6 +21,7 @@ define([
 
         this.defaultAttrs({
             titleSelector: '.workspace-title',
+            titleErrorSelector: '.form-title-error',
             shareListSelector: '.share-list',
             shareHeader: '.share-header',
             shareFormSelector: '.share-form',
@@ -215,27 +216,38 @@ define([
         this.onChangeTitle = function(event) {
             var self = this,
                 $target = $(event.target),
-                val = $target.val();
+                val = $target.val().trim().replace(/\s+/g, ' ');
 
-            if ($.trim(val).length === 0) {
+            if (!val.length) {
+                this.select('titleErrorSelector').hide();
                 return;
             }
 
-            if (val !== this.attr.data.title) {
-                if (!this.titleRevert) {
-                    this.titleRevert = $.extend(true, {}, this.attr.data);
+            if (_.contains(this.attr.workspaceTitlesLowercase, val.toLowerCase()) &&
+                val.toLowerCase() !== this.attr.currentWorkspaceTitle.toLowerCase()) {
+                this.select('titleSelector').addClass('invalid');
+                this.select('titleErrorSelector').show();
+                return;
+            } else {
+                this.select('titleSelector').removeClass('invalid');
+                this.select('titleErrorSelector').hide();
+
+                if (val !== this.attr.data.title) {
+                    if (!this.titleRevert) {
+                        this.titleRevert = $.extend(true, {}, this.attr.data);
+                    }
+                    this.attr.data.title = val;
+                    this.saveWorkspace(false, {
+                        changes: {
+                            title: val
+                        },
+                        revert: this.titleRevert
+                    }).fail(function() {
+                        $target.val(self.titleRevert.title);
+                    }).always(function() {
+                        self.titleRevert = null;
+                    });
                 }
-                this.attr.data.title = val;
-                this.saveWorkspace(false, {
-                    changes: {
-                        title: val
-                    },
-                    revert: this.titleRevert
-                }).fail(function() {
-                    $target.val(self.titleRevert.title);
-                }).always(function() {
-                    self.titleRevert = null;
-                });
             }
         };
 

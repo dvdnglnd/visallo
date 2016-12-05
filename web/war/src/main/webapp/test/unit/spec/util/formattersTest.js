@@ -1,4 +1,7 @@
-define(['util/formatters'], function(f) {
+define([
+    'util/formatters',
+    'moment-timezone'
+], function(f, moment) {
 
     describe('formatters', function() {
 
@@ -52,6 +55,7 @@ define(['util/formatters'], function(f) {
                 f.number.duration(1).should.equal('1s');
                 f.number.duration(90).should.equal('1m 30s');
                 f.number.duration(7654).should.equal('2h 7m 34s');
+                f.number.duration(6844.003256).should.equal('1h 54m 4s');
             })
         });
 
@@ -220,13 +224,21 @@ define(['util/formatters'], function(f) {
             it('should create local dates', function() {
                 var date = new Date('2015-06-23T13:16:00'),
                     offset = date.getTimezoneOffset(),
-                    dateLocal = new Date(date.getTime() + offset * 60 * 1000);
+                    dateLocal = new Date(date.getTime() + offset * 60 * 1000),
+                    isNegative = offset > 0,
+                    hours = '' + Math.floor(Math.abs(offset) / 60),
+                    minutes = '' + (Math.abs(offset) % 60);
 
-                f.date.local('2015-06-23 13:16 CDT').getTime().should.equal(dateLocal.getTime())
+                if (hours.length < 2) hours = '0' + hours;
+                if (minutes.length < 2) minutes = '0' + minutes;
+
+                var thisMachineTimezoneOffsetStr = (isNegative ? '-' : '+') + hours + ':' + minutes;
+                f.date.local('2015-06-23 13:16 ' + thisMachineTimezoneOffsetStr).getTime()
+                    .should.equal(dateLocal.getTime())
                 f.date.dateTimeString(dateLocal.getTime()).should.match(/^2015-06-23 13:16 .+$/)
             })
 
-            it('should format to prefered format', function() {
+            it('should format to preferred format', function() {
                 var now = new Date(),
                 month = String(now.getMonth() + 1);
 
@@ -248,8 +260,13 @@ define(['util/formatters'], function(f) {
                 f.date.timeString().should.equal('')
             })
 
+            it('should return empty strings when formatted incorrectly', function() {
+                f.date.local('2015-06-23 13:1').should.equal('')
+                f.date.utc('2015-06-23 13:1').should.equal('')
+            })
+
             it('should format dates when string thats actually a time millis', function() {
-                f.date.dateString('1396310400000').should.equal('2014-03-31')
+                f.date.dateString('1396310400000').should.equal(moment(1396310400000).format('YYYY-MM-DD'));
             })
 
             it('should format to prefered format with time', function() {

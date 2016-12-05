@@ -2,12 +2,17 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <groupId>org.sonatype.oss</groupId>
+        <artifactId>oss-parent</artifactId>
+        <version>7</version>
+    </parent>
     <modelVersion>4.0.0</modelVersion>
     <groupId>org.visallo</groupId>
     <artifactId>visallo-root</artifactId>
     <packaging>pom</packaging>
     <name>Visallo: Root</name>
-    <version>1.1-SNAPSHOT</version>
+    <version>3.1-SNAPSHOT</version>
 
     <inceptionYear>2013</inceptionYear>
     <organization>
@@ -30,54 +35,54 @@
     </scm>
 
     <properties>
-        <v5.visallo.version>1.1-SNAPSHOT</v5.visallo.version>
+        <v5.visallo.version>3.1-SNAPSHOT</v5.visallo.version>
 
         <!-- General -->
         <classpath.filename>${project.build.directory}/.classpath.${user.name}</classpath.filename>
         <java.compiler.showWarnings>true</java.compiler.showWarnings>
-        <java.source.version>1.7</java.source.version>
-        <java.target.version>1.7</java.target.version>
+        <java.source.version>1.8</java.source.version>
+        <java.target.version>1.8</java.target.version>
         <maven.build.timestamp.format>EEE MMM dd HH:mm z yyyy</maven.build.timestamp.format>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <!-- Dependency Versions -->
-        <accumulo.version>1.6.1</accumulo.version>
-        <h2.version>1.4.188</h2.version>
+        <accumulo.version>1.7.2</accumulo.version>
+        <h2.version>1.4.191</h2.version>
         <ant.version>1.4.1</ant.version>
-        <atmosphere.version>2.2.7</atmosphere.version>
+        <atmosphere.version>2.4.5</atmosphere.version>
+        <commons.math3.version>3.4.1</commons.math3.version>
         <commons.beanutils.version>1.9.1</commons.beanutils.version>
         <commons.cli.version>1.2</commons.cli.version>
         <jcommander.version>1.47</jcommander.version>
         <commons.codec.version>1.8</commons.codec.version>
-        <commons.compress.version>1.8.1</commons.compress.version>
+        <commons.compress.version>1.11</commons.compress.version>
         <commons.io.version>2.4</commons.io.version>
         <commons.lang.version>2.5</commons.lang.version>
         <commons.httpclient.version>3.1</commons.httpclient.version>
-        <curator.version>2.8.0</curator.version>
-        <elasticsearch.version>1.4.4</elasticsearch.version>
+        <curator.version>2.11.0</curator.version>
+        <elasticsearch.version>1.7.5</elasticsearch.version>
         <evo.inflector.version>1.0.1</evo.inflector.version>
-        <guice.version>3.0</guice.version>
-        <hadoop.version>2.6.0-cdh5.4.2</hadoop.version>
+        <guice.version>4.1.0</guice.version>
+        <visallo.closure.compiler.version>1.0.0</visallo.closure.compiler.version>
+        <hadoop.version>2.6.0-cdh5.9.0</hadoop.version>
         <twill.version>0.4.0-incubating</twill.version>
-        <hadoop-test.version>2.6.0-mr1-cdh5.4.2</hadoop-test.version>
         <httpcomponents.httpclient.version>4.4.1</httpcomponents.httpclient.version>
         <inflector.version>0.7.0</inflector.version>
         <jackson.version>2.4.3</jackson.version>
-        <jackson-mapper-asl.version>1.9.2</jackson-mapper-asl.version>
-        <jetty.version>9.2.7.v20150116</jetty.version>
+        <jackson-mapper-asl.version>1.9.13</jackson-mapper-asl.version>
+        <jetty.version>9.2.9.v20150224</jetty.version>
         <jetty.javaee.version>3.0.0.v201112011016</jetty.javaee.version>
         <javax.servlet.api.version>3.1.0</javax.servlet.api.version>
         <json.version>20131018</json.version>
         <lesscss.version>1.3.3</lesscss.version>
         <log4j.version>1.2.17</log4j.version>
-        <lucene.version>4.7.0</lucene.version>
         <metrics.version>3.0.2</metrics.version>
-        <vertexium.version>2.2.4</vertexium.version>
-        <simple-orm.version>1.0.2</simple-orm.version>
-        <groovy.version>2.4.3</groovy.version>
+        <vertexium.version>2.5.0</vertexium.version>
+        <simple-orm.version>1.3.0</simple-orm.version>
+        <groovy.version>2.4.5</groovy.version>
         <zip4j.version>1.3.1</zip4j.version>
-        <zookeeper.version>3.4.7</zookeeper.version>
+        <zookeeper.version>3.4.5-cdh5.9.0</zookeeper.version>
         <jersey.version>1.19</jersey.version>
         <maven.plugin.version>3.1.6</maven.plugin.version>
         <slf4j.version>1.7.10</slf4j.version>
@@ -85,27 +90,36 @@
         <xerces.version>2.9.1</xerces.version>
         <xalan.version>2.7.1</xalan.version>
         <owlapi.version>4.0.2</owlapi.version>
-        <webster.version>2.2.0</webster.version>
+        <webster.version>2.2.1</webster.version>
         <drewnoakes.version>2.8.1</drewnoakes.version>
-        <jai-imageio.version>1.2.1</jai-imageio.version>
+        <jai-imageio.version>1.3.1</jai-imageio.version>
         <rhino.version>1.7R4</rhino.version>
         <reflections.version>0.9.10</reflections.version>
-        <spark.version>1.5.1</spark.version>
-        <spark.scala.version>2.10</spark.scala.version>
-        <spark.scala.library.version>2.10.6</spark.scala.library.version>
-        <lesscss.version>1.7.0.1.1</lesscss.version>
-
-        <!-- update monthly -->
+        <spark.version>2.0.1</spark.version>
+        <spark.scala.version>2.11</spark.scala.version>
+        <spark.scala.library.version>2.11.7</spark.scala.library.version>
+        <maven-scala-plugin.version>2.15.2</maven-scala-plugin.version>
+        <hazelcast.version>3.5.2</hazelcast.version>
+        <dbcp2.version>2.1.1</dbcp2.version>
+        <jdbi.version>2.63.1</jdbi.version>
+        <commons-fileupload.version>1.3.1</commons-fileupload.version>
+        <handlebars.version>1.0.0</handlebars.version>
+        <javax.mail.version>1.4.5</javax.mail.version>
         <uadetector.resources.version>2014.06</uadetector.resources.version>
+        <mysql.version>5.1.38</mysql.version>
+        <tika.version>1.13</tika.version>
+        <pdfbox.version>2.0.1</pdfbox.version>
+        <apache.poi.version>3.15-beta1</apache.poi.version>
 
         <!-- Test Dependency Versions -->
         <junit.version>4.11</junit.version>
+        <jsoup.version>1.8.3</jsoup.version>
         <hamcrest.version>1.3</hamcrest.version>
         <mockito.version>1.9.5</mockito.version>
         <powermock.version>1.5.1</powermock.version>
         <cobertura.version>2.0.3</cobertura.version>
 
-        <!-- Maven Plugin Versions -->
+        <!-- Maven Plugin Properties -->
         <plugin.buildnumber.version>1.2</plugin.buildnumber.version>
         <plugin.cobertura.version>2.6</plugin.cobertura.version>
         <plugin.doxia.markdown.version>1.5</plugin.doxia.markdown.version>
@@ -116,7 +130,7 @@
         <plugin.maven.clean.version>2.5</plugin.maven.clean.version>
         <plugin.maven.compiler.version>3.1</plugin.maven.compiler.version>
         <plugin.maven.dependency.version>2.8</plugin.maven.dependency.version>
-        <plugin.maven.exec.version>1.3.2</plugin.maven.exec.version>
+        <plugin.maven.exec.version>1.5.0</plugin.maven.exec.version>
         <plugin.maven.war.version>2.4</plugin.maven.war.version>
         <plugin.maven.jar.version>2.4</plugin.maven.jar.version>
         <plugin.maven.javadoc.version>2.9.1</plugin.maven.javadoc.version>
@@ -126,6 +140,7 @@
         <plugin.maven.shade.version>2.2</plugin.maven.shade.version>
         <plugin.maven.site.version>3.3</plugin.maven.site.version>
         <plugin.maven.source.version>2.2.1</plugin.maven.source.version>
+        <plugin.maven.sql.version>1.5</plugin.maven.sql.version>
         <plugin.maven.surefire.version>2.16</plugin.maven.surefire.version>
         <plugin.maven.antrun.version>1.8</plugin.maven.antrun.version>
         <plugin.build-helper-maven-plugin>1.9.1</plugin.build-helper-maven-plugin>
@@ -133,44 +148,21 @@
         <plugin.sonar.version>4.0</plugin.sonar.version>
         <plugin.taglist.version>2.4</plugin.taglist.version>
         <plugin.template.resgen.version>0.11</plugin.template.resgen.version>
-        <plugin.frontend>0.0.26</plugin.frontend>
-        <commons-fileupload.version>1.3.1</commons-fileupload.version>
-        <handlebars.version>1.0.0</handlebars.version>
-        <javax.mail.version>1.4.5</javax.mail.version>
-        <node.version>v4.2.1</node.version>
-        <npm.version>3.3.8</npm.version>
+        <plugin.frontend>1.2</plugin.frontend>
+        <maven.plugin.gpg.version>1.6</maven.plugin.gpg.version>
+
+        <!-- Node Properties -->
+        <node.version>v6.2.0</node.version>
+        <npm.version>3.8.9</npm.version>
+        <yarnjs.version>v0.17.10</yarnjs.version>
+        <frontend.installDirectory>${settings.localRepository}/node/${node.version}</frontend.installDirectory>
     </properties>
 
-    <distributionManagement>
-        <snapshotRepository>
-            <id>v5analytics-snapshots</id>
-            <url>https://mvn.v5analytics.com/content/repositories/${distributionManagement.target}-snapshots</url>
-        </snapshotRepository>
-        <repository>
-            <id>v5analytics</id>
-            <url>https://mvn.v5analytics.com/content/repositories/${distributionManagement.target}</url>
-        </repository>
-    </distributionManagement>
-
     <repositories>
-        <!-- FOR: Vertexium, Webster Snapshots -->
-        <repository>
-            <snapshots>
-                <enabled>true</enabled>
-                <updatePolicy>interval:60</updatePolicy>
-            </snapshots>
-            <id>sonatype-snapshots</id>
-            <url>http://oss.sonatype.org/content/repositories/snapshots/</url>
-        </repository>
-
         <!-- FOR: CDH -->
         <repository>
             <id>com.cloudera</id>
             <url>https://repository.cloudera.com/content/repositories/releases/</url>
-        </repository>
-        <repository>
-            <id>clojars.org</id>
-            <url>http://clojars.org/repo</url>
         </repository>
 
         <!-- FOR: gwtwiki (Wikipedia parser) -->
@@ -300,6 +292,12 @@
                 <groupId>com.google.inject</groupId>
                 <artifactId>guice</artifactId>
                 <version>${guice.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>com.google.guava</groupId>
+                        <artifactId>guava</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
             <dependency>
                 <groupId>com.google.inject.extensions</groupId>
@@ -426,23 +424,25 @@
                 <version>${accumulo.version}</version>
             </dependency>
             <dependency>
+                <groupId>org.apache.accumulo</groupId>
+                <artifactId>accumulo-tracer</artifactId>
+                <version>${accumulo.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-compress</artifactId>
                 <version>${commons.compress.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-math3</artifactId>
+                <version>${commons.math3.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.hadoop</groupId>
                 <artifactId>hadoop-client</artifactId>
                 <version>${hadoop.version}</version>
                 <exclusions>
-                    <exclusion>
-                        <groupId>org.codehaus.jackson</groupId>
-                        <artifactId>jackson-core-asl</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>org.codehaus.jackson</groupId>
-                        <artifactId>jackson-mapper-asl</artifactId>
-                    </exclusion>
                     <exclusion>
                         <groupId>org.apache.curator</groupId>
                         <artifactId>curator-client</artifactId>
@@ -498,15 +498,14 @@
                 <version>${reflections.version}</version>
             </dependency>
             <dependency>
-                <groupId>org.lesscss</groupId>
-                <artifactId>lesscss</artifactId>
+                <groupId>com.asual.lesscss</groupId>
+                <artifactId>lesscss-engine</artifactId>
                 <version>${lesscss.version}</version>
-                <exclusions>
-                    <exclusion>
-                        <groupId>org.slf4j</groupId>
-                        <artifactId>slf4j-simple</artifactId>
-                    </exclusion>
-                </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>org.visallo</groupId>
+                <artifactId>visallo-closure-compiler</artifactId>
+                <version>${visallo.closure.compiler.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.json</groupId>
@@ -549,6 +548,11 @@
                 <version>${h2.version}</version>
             </dependency>
             <dependency>
+                <groupId>mysql</groupId>
+                <artifactId>mysql-connector-java</artifactId>
+                <version>${mysql.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>org.vertexium</groupId>
                 <artifactId>vertexium-core</artifactId>
                 <version>${vertexium.version}</version>
@@ -577,6 +581,12 @@
                 <groupId>org.vertexium</groupId>
                 <artifactId>vertexium-sql</artifactId>
                 <version>${vertexium.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.vertexium</groupId>
+                <artifactId>vertexium-test</artifactId>
+                <version>${vertexium.version}</version>
+                <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>org.vertexium</groupId>
@@ -708,10 +718,9 @@
                 <scope>test</scope>
             </dependency>
             <dependency>
-                <groupId>org.apache.hadoop</groupId>
-                <artifactId>hadoop-test</artifactId>
-                <version>${hadoop-test.version}</version>
-                <scope>test</scope>
+                <groupId>org.jsoup</groupId>
+                <artifactId>jsoup</artifactId>
+                <version>${jsoup.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.mockito</groupId>
@@ -739,6 +748,52 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <profiles>
+        <profile>
+            <id>visallo-release</id>
+            <distributionManagement>
+                <repository>
+                    <id>enterprise-plugins</id>
+                    <name>enterprise-plugins</name>
+                    <url>${visallo.nexus.enterprise-plugins}</url>
+                </repository>
+                <snapshotRepository>
+                    <id>enterprise-plugins-snapshots</id>
+                    <name>enterprise-plugins-snapshots</name>
+                    <url>${visallo.nexus.enterprise-plugins-snapshots}</url>
+                </snapshotRepository>
+            </distributionManagement>
+        </profile>
+        <profile>
+            <id>release-tasks</id>
+            <activation>
+                <!-- mvn release:perform sets this to true -->
+                <property>
+                    <name>performRelease</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>${maven.plugin.gpg.version}</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <build>
         <pluginManagement>
@@ -783,6 +838,12 @@
                 </plugin>
 
                 <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>${plugin.maven.exec.version}</version>
+                </plugin>
+
+                <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>${plugin.maven.compiler.version}</version>
@@ -815,6 +876,13 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-jar-plugin</artifactId>
                     <version>${plugin.maven.jar.version}</version>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>test-jar</goal>
+                            </goals>
+                        </execution>
+                    </executions>
                     <configuration>
                         <archive>
                             <manifest>

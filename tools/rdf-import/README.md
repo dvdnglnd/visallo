@@ -20,6 +20,9 @@ You can supply visibility to a vertex by appending `[visibility string]`.
 
 This will create a vertex with the visibility `SECRET`.
 
+If the visibility string starts with a `!` the visibility string will not be transformed using the visibility translator
+and instead be used directly.
+
 ### Multi-value key
 
 You can supply multi-value keys by appending `:key` to a property name.
@@ -45,3 +48,27 @@ You can add binary content properties by specifying a type of `http://visallo.or
         <http://dbpedia.org/resource/Aristotle> <http://visallo.org#raw> "Aristotle.png"^^<http://visallo.org#streamingPropertyValue>
 
 This will create a property called `http://visallo.org#raw` with the binary content from `Aristotle.png`
+
+### Inline streaming property value
+
+You can also inline the streaming property value using `http://visallo.org#streamingPropertyValueInline`
+
+        <http://dbpedia.org/resource/Aristotle> <http://visallo.org#raw> "Some really long text..."^^<http://visallo.org#streamingPropertyValueInline>
+
+This will create a property called `http://visallo.org#raw` with the contents of `Some really long text...`
+
+### Edge Id
+
+You can supply an edge id by appending `:edgeId` to the label.
+
+        <http://dbpedia.org/resource/Aristotle> <http://dbpedia.org/property/mainInterests:edge1> <http://dbpedia.org/resource/Physics> .
+
+This will create an edge with id `edge1`.
+
+### Edge Properties
+
+To add an edge property the first triple must be prefixed with `EDGE:`
+
+        <EDGE:edge1> <http://visallo.org#source> "RDF Triple Import" .
+
+This will add a source property to `edge1`.

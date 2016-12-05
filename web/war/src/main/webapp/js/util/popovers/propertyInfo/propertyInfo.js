@@ -4,12 +4,18 @@ define([
     '../withPopover',
     'util/vertex/formatters',
     'util/withDataRequest',
+    'util/privileges',
+    'util/visibility/view',
+    'util/acl',
     'd3'
 ], function(
     defineComponent,
     withPopover,
     F,
     withDataRequest,
+    Privileges,
+    VisibilityViewer,
+    acl,
     d3) {
     'use strict';
 
@@ -27,30 +33,13 @@ define([
         });
 
         this.before('initialize', function(node, config) {
-            config.template = 'propertyInfo/template';
-            config.isFullscreen = visalloData.isFullscreen;
-            if (config.property) {
-                config.isComment = config.property.name === 'http://visallo.org/comment#entry';
-                config.isCommentCreator = config.isComment &&
-                    config.property.metadata &&
-                    config.property.metadata['http://visallo.org#modifiedBy'] === visalloData.currentUser.id;
-                config.canEdit = config.property.updateable !== false &&
-                    (config.isComment ? config.isCommentCreator : true);
-                config.canDelete = config.property.deleteable !== false &&
-                    config.canEdit && config.property.name !== 'http://visallo.org#visibilityJson';
-                config.canAdd = config.property.addable !== false;
-
-                var isCompoundField = config.ontologyProperty && config.ontologyProperty.dependentPropertyIris &&
-                    config.ontologyProperty.dependentPropertyIris.length;
-                config.canSearch = config.ontologyProperty &&
-                    (config.ontologyProperty.searchable || isCompoundField) &&
-                    !config.isFullscreen;
-            }
-            config.hideDialog = true;
+            config.manualSetup = true;
         });
 
         this.after('initialize', function() {
             var self = this;
+
+            this.setupConfig(this.attr);
 
             this.after('setupWithTemplate', function() {
                 this.dataRequest('config', 'properties')
@@ -90,13 +79,55 @@ define([
             });
         });
 
+        this.setupConfig = function(config) {
+            config.template = 'propertyInfo/template';
+            config.isFullscreen = visalloData.isFullscreen;
+
+            acl.getPropertyAcls(config.data)
+                .then((propertyAcls) => {
+                    if (config.property) {
+                        config.isComment = config.property.name === 'http://visallo.org/comment#entry';
+                        config.canAdd = config.canEdit = config.canDelete = false;
+
+                        var propertyAcl = acl.findPropertyAcl(propertyAcls, config.property.name, config.property.key);
+
+                        if (config.isComment && visalloData.currentWorkspaceCommentable) {
+                            config.canAdd = config.property.addable !== undefined ? config.property.addable !== false : propertyAcl.addable !== false;
+                            config.canEdit = config.property.updateable !== undefined ? config.property.updateable !== false : propertyAcl.updateable !== false;
+                            config.canDelete = config.property.deleteable !== undefined ? config.property.deleteable !== false : propertyAcl.deleteable !== false;
+                        } else if (!config.isComment && visalloData.currentWorkspaceEditable) {
+                            config.canAdd = config.property.addable !== undefined ? config.property.addable !== false : propertyAcl.addable !== false;
+                            config.canEdit = config.property.updateable !== undefined ? config.property.updateable !== false : propertyAcl.updateable !== false;
+                            config.canDelete = (config.property.deleteable !== undefined ? config.property.deleteable !== false : propertyAcl.deleteable !== false) &&
+                                config.property.name !== 'http://visallo.org#visibilityJson';
+                        }
+
+                        var isCompoundField = config.ontologyProperty && config.ontologyProperty.dependentPropertyIris &&
+                            config.ontologyProperty.dependentPropertyIris.length;
+
+                        config.canSearch = config.ontologyProperty &&
+                            (config.ontologyProperty.searchable || isCompoundField) &&
+                            !config.isFullscreen;
+
+                        if (config.property.streamingPropertyValue) {
+                            config.canAdd = config.canDelete = config.canSearch = false;
+                        }
+
+                    }
+
+                    config.hideDialog = true;
+
+                    this.attr.finishSetup();
+            });
+        };
+
         this.onEscapeKey = function() {
             this.teardown();
         };
 
         this.update = function() {
             var self = this,
-                vertexId = this.attr.data.id,
+                element = this.attr.data,
                 isVisibility = this.attr.property.name === 'http://visallo.org#visibilityJson',
                 property = isVisibility ?
                     _.first(F.vertex.props(this.attr.data, this.attr.property.name)) :
@@ -127,6 +158,14 @@ define([
                         }
                         return true;
                     })
+                    .tap(function(metadata) {
+                        if (property.streamingPropertyValue) {
+                            var key = 'http://visallo.org#visibilityJson';
+                            metadata.push([key, property.metadata && property.metadata[key]]);
+                            displayNames[key] = i18n('visibility.label');
+                            displayTypes[key] = 'visibility';
+                        }
+                    })
                     .value(),
                 row = this.contentRoot.select('table')
                     .selectAll('tr')
@@ -142,30 +181,33 @@ define([
 
             this.contentRoot.selectAll('tr')
                 .call(function() {
-                    var self = this;
-
                     this.select('td.property-name').text(function(d) {
                         return displayNames[d[0]];
                     });
 
-                    var valueElement = self.select('td.property-value')
+                    var valueElement = this.select('td.property-value')
                         .each(function(d) {
                             var self = this,
-                                $self = $(this),
                                 typeName = displayTypes[d[0]],
                                 formatter = F.vertex.metadata[typeName],
                                 formatterAsync = F.vertex.metadata[typeName + 'Async'],
                                 value = d[1];
 
                             if (formatter) {
-                                formatter(this, value);
+                                formatter(self, value);
                             } else if (formatterAsync) {
-                                formatterAsync(self, value, property, vertexId)
+                                formatterAsync(self, value, property, element.id)
                                     .catch(function() {
                                         d3.select(self).text(i18n('popovers.property_info.error', value));
                                     })
                                     .finally(positionDialog);
                                 d3.select(this).text(i18n('popovers.property_info.loading'));
+                            } else if (typeName === 'visibility') {
+                                VisibilityViewer.attachTo(this, {
+                                    value: value && value.source,
+                                    property: property,
+                                    element: element
+                                });
                             } else {
                                 console.warn('No metadata type formatter: ' + typeName);
                                 d3.select(this).text(value);
@@ -185,12 +227,27 @@ define([
 
             if (justificationMetadata && justificationMetadata.justificationText) {
                 justification.push({
-                    justificationText: property.metadata['http://visallo.org#justification']
+                    justificationText: justificationMetadata
                 })
             }
 
             if (isVisibility) {
-                this.renderJustification([])
+                var entityJustification = _.findWhere(this.attr.data.properties, { name: 'http://visallo.org#justification' }),
+                    sourceInfo = entityJustification && entityJustification.value;
+                if (sourceInfo && 'justificationText' in sourceInfo) {
+                    justification = [{ justificationText: sourceInfo }];
+                } else {
+                    justification = [];
+                }
+                this.renderJustification(justification);
+                if (justification.length === 0) {
+                    this.requestDetails().then(function(sourceInfo) {
+                        if (sourceInfo) {
+                            self.renderJustification([{ sourceInfo: sourceInfo }]);
+                            positionDialog();
+                        }
+                    })
+                }
             } else {
                 this.renderJustification(justification);
                 if (!justificationMetadata || !('justificationText' in justificationMetadata)) {
@@ -221,6 +278,16 @@ define([
 
             this.dialog.show();
             positionDialog();
+        };
+
+        this.requestDetails = function() {
+            var model = this.attr.data,
+                service = F.vertex.isEdge(model) ? 'edge' : 'vertex';
+
+            return this.dataRequest(service, 'details', model.id)
+                .then(function(result) {
+                    return result.sourceInfo;
+                });
         };
 
         this.renderJustification = function(justification) {

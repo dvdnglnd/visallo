@@ -4,7 +4,6 @@ import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.beust.jcommander.converters.FileConverter;
 import com.google.inject.Inject;
-import org.vertexium.Visibility;
 import org.visallo.common.rdf.RdfImportHelper;
 import org.visallo.core.cmdline.CommandLineTool;
 import org.visallo.core.cmdline.converters.WorkQueuePriorityConverter;
@@ -42,20 +41,27 @@ public class RdfImport extends CommandLineTool {
     @Parameter(names = {"--timezone"}, arity = 1, description = "The Java timezone id")
     private String timeZoneId = "GMT";
 
+    @Parameter(names = {"--failOnFirstError"}, description = "Abort import if an error occurs")
+    private boolean failOnFirstError = false;
+
+    @Parameter(names = {"--disableWorkQueues"}, description = "Disable pushing elements on the broadcast and/or GPW queues")
+    private boolean disableWorkQueues = false;
+
     public static void main(String[] args) throws Exception {
         CommandLineTool.main(new RdfImport(), args);
     }
 
     @Override
     protected int run() throws Exception {
-        Visibility visibility = getVisibilityTranslator().toVisibility(visibilitySource).getVisibility();
+        rdfImportHelper.setFailOnFirstError(failOnFirstError);
+        rdfImportHelper.setDisableWorkQueues(disableWorkQueues);
         TimeZone timeZone = TimeZone.getTimeZone(timeZoneId);
-        importInFiles(inFiles, timeZone, visibility);
-        importInDirs(inDirs, pattern, timeZone, visibility);
+        importInFiles(inFiles, timeZone);
+        importInDirs(inDirs, pattern, timeZone);
         return 0;
     }
 
-    private void importInDirs(List<File> inputDirs, String pattern, TimeZone timeZone, Visibility visibility) throws IOException {
+    private void importInDirs(List<File> inputDirs, String pattern, TimeZone timeZone) throws IOException {
         for (File inputDir : inputDirs) {
             if (!inputDir.exists()) {
                 throw new VisalloException("Could not find input directory: " + inputDir.getAbsolutePath());
@@ -68,18 +74,18 @@ public class RdfImport extends CommandLineTool {
             for (File inputFile : files) {
                 Path fileNamePath = FileSystems.getDefault().getPath(inputFile.getName());
                 if (matcher.matches(fileNamePath)) {
-                    rdfImportHelper.importRdf(inputFile, timeZone, priority, visibility, getUser(), getAuthorizations());
+                    rdfImportHelper.importRdf(inputFile, timeZone, priority, visibilitySource, getUser(), getAuthorizations());
                 }
             }
         }
     }
 
-    private void importInFiles(List<File> inFiles, TimeZone timeZone, Visibility visibility) throws IOException {
+    private void importInFiles(List<File> inFiles, TimeZone timeZone) throws IOException {
         for (File inputFile : inFiles) {
             if (!inputFile.exists()) {
                 throw new VisalloException("Could not find file: " + inputFile.getAbsolutePath());
             }
-            rdfImportHelper.importRdf(inputFile, timeZone, priority, visibility, getUser(), getAuthorizations());
+            rdfImportHelper.importRdf(inputFile, timeZone, priority, visibilitySource, getUser(), getAuthorizations());
         }
     }
 

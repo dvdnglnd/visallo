@@ -45,17 +45,34 @@ function(jQuery,
         );
     window.TRANSITION_END = 'transitionend webkitTransitionEnd MSTransitionEnd oTransitionEnd otransitionend';
     window.ANIMATION_END = 'animationend webkitAnimationEnd MSAnimationEnd oAnimationEnd oanimationend';
+    window.VISALLO_MIMETYPES = _.mapObject({
+        _PREFIX: 'application/x-visallo.',
+        _FORMAT: '+json',
+        _DataTransferHasVisallo: (dataTransfer, specificType) => {
+            return _.any(dataTransfer.types, (type) => {
+                if (specificType) return type === specificType
+                return type.indexOf(VISALLO_MIMETYPES._PREFIX) === 0;
+            })
+        },
+
+        ELEMENTS: 'elements',
+        RESOLVED_INFO: 'resolvedInfo'
+    }, (str, key, obj) => {
+        if (key.substring(0, 1) !== '_') {
+            return obj._PREFIX + str + obj._FORMAT;
+        }
+        return str;
+    })
 
     var progress = 0,
         progressBar = null,
         progressBarText = null,
-        TOTAL_PROGRESS = 5,
+        TOTAL_PROGRESS = 4,
         MAX_RESIZE_TRIGGER_INTERVAL = 250,
-        App, FullScreenApp, F, withDataRequest;
+        App, FullScreenApp, F, withDataRequest,
+        previousUrl = window.location.href;
 
     $(function() {
-        updateVisalloLoadingProgress('Dependencies');
-
         require(['cli']);
         require(['data/data'], configureApplication);
 
@@ -86,65 +103,83 @@ function(jQuery,
                     $(document).trigger('windowResize');
                 }, MAX_RESIZE_TRIGGER_INTERVAL));
 
-            require([
-                'util/messages',
-                'util/vertex/urlFormatters',
-                'util/withDataRequest',
-                'util/handlebars/before_auth_helpers'
-            ], function(i18n, _F, _withDataRequest) {
-                updateVisalloLoadingProgress('Utilities');
-                window.i18n = i18n;
-                F = _F;
-                withDataRequest = _withDataRequest;
-                loadApplicationTypeBasedOnUrlHash();
-            });
+            Promise.require('util/messages')
+                .then(function(_i18n) {
+                    window.i18n = _i18n;
+                    updateVisalloLoadingProgress('dependencies');
+
+                    require([
+                        'util/vertex/urlFormatters',
+                        'util/withDataRequest',
+                        'util/handlebars/before_auth_helpers'
+                    ], function(_F, _withDataRequest) {
+                        F = _F;
+                        withDataRequest = _withDataRequest;
+                        loadApplicationTypeBasedOnUrlHash();
+                    })
+                })
         }
     });
+
+    function userHasValidPrivileges(me) {
+        return me.privileges && me.privileges.length > 0;
+    }
 
     /**
      * Switch between visallo and visallo-fullscreen-details based on url hash
      */
     function loadApplicationTypeBasedOnUrlHash(e) {
         var toOpen = F.vertexUrl.parametersInUrl(location.href),
-
-            ids = toOpen && toOpen.vertexIds,
+            vertexIds = toOpen && toOpen.vertexIds,
+            edgeIds = toOpen && toOpen.edgeIds,
+            toOpenIds = (
+                (vertexIds && vertexIds.length) ||
+                (edgeIds && edgeIds.length)
+            ),
 
             workspaceId = toOpen && toOpen.workspaceId,
 
+            redirectUrl = toOpen && toOpen.redirectUrl,
+
             // Is this the popoout details app? ids passed to hash?
-            popoutDetails = !!(toOpen && toOpen.type === 'FULLSCREEN' && ids.length),
+            popoutDetails = !!(toOpen && toOpen.type === 'FULLSCREEN' && toOpenIds),
 
             // If this is a hash change
             event = e && e.originalEvent,
 
             // Is this the default visallo application?
-            mainApp = !popoutDetails;
+            mainApp = !popoutDetails,
+            newUrl = window.location.href;
 
-        if (event && isAddUrl(event.oldURL) && isMainApp(event.newURL)) {
+        if (event && (isAddUrl(previousUrl) || isRedirectUrl(previousUrl)) && isMainApp(newUrl)) {
+            previousUrl = newUrl;
             return;
         }
 
-        if (event && isPopoutUrl(event.oldURL) && isPopoutUrl(event.newURL)) {
+        if (event && isPopoutUrl(previousUrl) && isPopoutUrl(newUrl)) {
+            previousUrl = newUrl;
             return $('#app').trigger('vertexUrlChanged', {
-                graphVertexIds: ids,
-                workspaceId: workspaceId
+                vertexIds: vertexIds,
+                edgeIds: edgeIds,
+                workspaceId: workspaceId,
+                redirectUrl: redirectUrl
             });
         }
 
-        Promise.require('../plugins-before-auth')
-            .then(function() {
-                return withDataRequest.dataRequest('user', 'me')
-            })
-            .then(function() {
-                attachApplication(false);
+        previousUrl = newUrl;
+        Promise.all(visalloPluginResources.beforeAuth.map(Promise.require))
+            .then(loadUser)
+            .then(function(me) {
+                if (!userHasValidPrivileges(me)) {
+                    throw new Error('missing privileges')
+                }
+                attachApplication(false, null, null, me);
             })
             .catch(function() {
                 attachApplication(true, '', {});
-            })
+            });
 
-        function attachApplication(loginRequired, message, options) {
-            updateVisalloLoadingProgress('Extensions');
-
+        function attachApplication(loginRequired, message, options, user) {
             if (!event) {
                 $('html')
                     .toggleClass('fullscreenApp', mainApp)
@@ -156,15 +191,23 @@ function(jQuery,
             visalloData.isFullscreen = false;
 
             if (loginRequired) {
-                updateVisalloLoadingProgress('User Interface');
+                // Login required, once less progress item (no after-auth plugins)
+                TOTAL_PROGRESS--;
+                updateVisalloLoadingProgress('userinterface');
 
                 $(document).one('loginSuccess', function() {
-                    // FIXME: privilegesHelper not available yet
-                    document.addEventListener('pluginsLoaded', function loaded() {
-                        document.removeEventListener('pluginsLoaded', loaded);
-                        loginSuccess(true);
-                    }, false);
-                    document.dispatchEvent(new Event('readyForPlugins'));
+                    loadUser().then(user => {
+                        Promise.all(visalloPluginResources.afterAuth.map(Promise.require))
+                            .catch(function(error) {
+                                $('#login').trigger('showErrorMessage', {
+                                    message: i18n('visallo.loading.progress.pluginerror')
+                                })
+                                throw error;
+                            })
+                            .then(function() {
+                                loginSuccess({ animate: true, user });
+                            })
+                    })
                 });
 
                 require(['login'], function(Login) {
@@ -178,21 +221,41 @@ function(jQuery,
                     })
                 });
             } else {
-                document.addEventListener('pluginsLoaded', function loaded() {
-                    updateVisalloLoadingProgress('User Interface');
-
-                    document.removeEventListener('pluginsLoaded', loaded);
-                    loginSuccess(false);
-                }, false);
-                document.dispatchEvent(new Event('readyForPlugins'));
+                updateVisalloLoadingProgress('extensions', 0);
+                var len = visalloPluginResources.afterAuth.length,
+                    i = 0;
+                Promise.all(visalloPluginResources.afterAuth.map(function(path) {
+                    return Promise.require(path).then(function() {
+                        updateVisalloLoadingProgress('extensions', ++i / len);
+                    })
+                }))
+                    .catch(function(error) {
+                        removeVisalloLoading('pluginerror');
+                        throw error;
+                    })
+                    .then(function() {
+                        updateVisalloLoadingProgress('userinterface');
+                        loginSuccess({ user });
+                    })
             }
         }
 
-        function loginSuccess(animate) {
+        function loadUser() {
+            return withDataRequest.dataRequest('user', 'me')
+        }
+
+        function loginSuccess({ animate = false, user }) {
             if (animate && (/^#?[a-z]+=/i).test(location.hash)) {
                 window.location.reload();
             } else {
-                withDataRequest.dataRequest('user', 'me').then(function() {
+                Promise.resolve(user || loadUser()).then(function(me) {
+                    if (!userHasValidPrivileges(me)) {
+                        $('#login .authentication').html(
+                            '<span style="color: #D42B34;">' + i18n('visallo.login.missingPrivileges')
+                            + '<p/><a class="logout" href="">' + i18n('visallo.login.logout') + '</a>'
+                            + '</span>');
+                        return;
+                    }
 
                     require([
                         'moment',
@@ -232,7 +295,8 @@ function(jQuery,
                                         FullScreenApp = comp;
                                         FullScreenApp.teardownAll();
                                         FullScreenApp.attachTo('#app', {
-                                            graphVertexIds: ids,
+                                            vertexIds: vertexIds,
+                                            edgeIds: edgeIds,
                                             workspaceId: workspaceId
                                         });
                                     }
@@ -253,11 +317,18 @@ function(jQuery,
                                         }
                                         App.teardownAll();
                                         var appOptions = {};
-                                        if (toOpen && toOpen.type === 'ADD' && ids.length) {
+                                        if (toOpen && toOpen.type === 'ADD' && vertexIds.length) {
                                             appOptions.addVertexIds = toOpen;
                                         }
                                         if (toOpen && toOpen.type === 'ADMIN' && toOpen.section && toOpen.name) {
                                             appOptions.openAdminTool = _.pick(toOpen, 'section', 'name');
+                                        }
+                                        if (toOpen && toOpen.type === 'REDIRECT' && toOpen.redirectUrl) {
+                                            window.location.href = toOpen.redirectUrl;
+                                            return;
+                                        }
+                                        if (toOpen && toOpen.type === 'TOOLS' && !_.isEmpty(toOpen.tools)) {
+                                            appOptions.openMenubarTools = toOpen.tools;
                                         }
                                         if (animate) {
                                             $('#login .authentication button.loading').removeClass('loading');
@@ -287,25 +358,41 @@ function(jQuery,
         }
     }
 
-    function updateVisalloLoadingProgress(string) {
+    function updateVisalloLoadingProgress(string, percentInProgress) {
         if (!progressBar) {
             progressBar = $('#visallo-loading-static .bar')[0];
             progressBarText = $('#visallo-loading-static span')[0];
         }
+        if (progressBar.dataset.finished) return;
 
-        progress++;
-        progressBarText.textContent = string;
-        progressBar.style.width = Math.round(progress / TOTAL_PROGRESS * 100) + '%';
+        var translatedString = i18n('visallo.loading.progress.' + string);
+
+        if (arguments.length === 2 && percentInProgress < 1.0) {
+            var segment = 1 / TOTAL_PROGRESS,
+                inc = segment * percentInProgress;
+            progressBarText.textContent = translatedString;
+            progressBar.style.width = Math.round((progress / TOTAL_PROGRESS + inc) * 100) + '%';
+        } else {
+            progress++;
+            progressBarText.textContent = translatedString;
+            progressBar.style.width = Math.round(progress / TOTAL_PROGRESS * 100) + '%';
+        }
     }
 
-    function removeVisalloLoading() {
-        updateVisalloLoadingProgress('Starting');
-        return new Promise(function(fulfill) {
-            _.delay(function() {
-                $('#visallo-loading-static').remove();
-                fulfill();
-            }, 500)
-        });
+    function removeVisalloLoading(error) {
+        if (error) {
+            progressBar.dataset.finished = true;
+            progressBarText.textContent = i18n('visallo.loading.progress.' + error);
+            progressBarText.style.color = '#D42B34';
+        } else {
+            updateVisalloLoadingProgress('starting');
+            return new Promise(function(fulfill) {
+                _.delay(function() {
+                    $('#visallo-loading-static').remove();
+                    fulfill();
+                }, 500)
+            });
+        }
     }
 
     function isPopoutUrl(url) {
@@ -314,6 +401,10 @@ function(jQuery,
 
     function isAddUrl(url) {
         return (/#add=/).test(url);
+    }
+
+    function isRedirectUrl(url) {
+        return (/#redirect=/).test(url);
     }
 
     function isMainApp(url) {

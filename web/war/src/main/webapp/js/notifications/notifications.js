@@ -5,16 +5,19 @@ define([
 ], function(defineComponent, withDataRequest, d3) {
     'use strict';
 
+    var NOTIFICATION_HOVER_EXPAND_DELAY_MILLIS = 250;
+
     return defineComponent(Notifications, withDataRequest);
 
     function Notifications() {
 
         this.attributes({
-            allowDismiss: true,
+            allowSystemDismiss: true,
             animated: true,
             emptyMessage: true,
             showInformational: true,
-            showUserDismissed: false
+            showUserDismissed: false,
+            notificationSelector: '.notifications .notification'
         });
 
         this.after('initialize', function() {
@@ -35,6 +38,10 @@ define([
             this.on(document, 'postLocalNotification', this.onPostLocalNotification);
             this.on(document, 'notificationActive', this.onNotificationActive);
             this.on(document, 'notificationDeleted', this.onNotificationDeleted);
+
+            this.on('mouseover', {
+                notificationSelector: this.onMouseOver
+            });
 
             this.immediateUpdate = this.update;
             this.update = _.debounce(this.update.bind(this), 250);
@@ -58,6 +65,7 @@ define([
             this.$container = $('<div>')
                 .addClass('notifications')
                 .appendTo(this.$node);
+
         });
 
         this.onPostLocalNotification = function(event, data) {
@@ -83,6 +91,21 @@ define([
             this.trigger('notificationCountUpdated', { count: this.stack.length });
         };
 
+        this.onMouseOver = function(event, data) {
+            var self = this,
+                $notification = $(event.target).closest(this.attr.notificationSelector);
+
+            clearTimeout(self.hoverTimer);
+            self.hoverTimer = setTimeout(function() {
+                $notification.addClass('expanded-notification');
+            }, NOTIFICATION_HOVER_EXPAND_DELAY_MILLIS);
+
+            $notification.off('mouseover', 'mouseleave').on('mouseleave', function() {
+                clearTimeout(self.hoverTimer);
+                $notification.removeClass('expanded-notification');
+            })
+        };
+
         this.displayNotifications = function(notifications) {
             var self = this,
                 shouldDisplay = notifications && _.filter(notifications, function(n) {
@@ -98,6 +121,7 @@ define([
                 });
 
             if (shouldDisplay && shouldDisplay.length) {
+                shouldDisplay = collapseDuplicates(shouldDisplay);
                 shouldDisplay.forEach(function(updated) {
                     var index = -1;
                     self.stack.forEach(function(n, i) {
@@ -116,7 +140,10 @@ define([
                         var autoDismiss = self.autoDismissSeconds[updated.type];
                         if (autoDismiss > 0) {
                             _.delay(function() {
-                                self.dismissNotification(updated);
+                                self.dismissNotification(updated, {
+                                    markRead: false,
+                                    userDismissed: true
+                                });
                             }, autoDismiss * 1000);
                         }
                     }
@@ -136,19 +163,38 @@ define([
         };
 
         this.dismissNotification = function(notification, options) {
-            var immediate = options && options.immediate,
-                animate = options && options.animate;
+            var self = this,
+                immediate = options && options.immediate,
+                animate = options && options.animate,
+                markRead = options && !_.isUndefined(options.markRead) ? options.markRead : true,
+                userDismissed = options && !_.isUndefined(options.userDismissed) ? options.userDismissed : false;
 
             this.stack = _.reject(this.stack, function(n) {
+                if (n.collapsedIds) {
+                    return _.contains(n.collapsedIds, notification.id);
+                }
                 return n.id === notification.id;
             });
-            if (notification.type === 'user') {
-                this.markRead.push(notification.id);
-                this.sendMarkRead();
-            } else if (notification.hash) {
+
+            if (markRead) {
+                if (notification.type === 'user') {
+                    if (notification.collapsedIds) {
+                        notification.collapsedIds.forEach(function(nId) {
+                            self.markRead.push(nId);
+                        })
+                    } else {
+                        this.markRead.push(notification.id);
+                    }
+                    this.sendMarkRead();
+                } else if (notification.hash) {
+                    this.setUserDismissed(notification.id, notification.hash);
+                } else {
+                    console.warn('Notification missing hash', notification);
+                }
+            }
+
+            if (userDismissed && notification.type === 'user' && notification.hash) {
                 this.setUserDismissed(notification.id, notification.hash);
-            } else {
-                console.warn('Notification missing hash', notification);
             }
 
             if (immediate) {
@@ -182,7 +228,7 @@ define([
         };
 
         this.canDismissNotification = function(notification) {
-            return this.attr.allowDismiss !== false || notification.type !== 'system';
+            return this.attr.allowSystemDismiss !== false || notification.type !== 'system';
         };
 
         this.update = function(forceAnimation) {
@@ -217,11 +263,14 @@ define([
                                 });
                             }
                         }
-                        if (self.canDismissNotification(clicked)) {
-                            self.dismissNotification(clicked, {
-                                immediate: true,
-                                animate: true
-                            });
+
+                        if (clickedButton) {
+                            if (self.canDismissNotification(clicked)) {
+                                self.dismissNotification(clicked, {
+                                    immediate: true,
+                                    animate: true
+                                });
+                            }
                         }
                     });
                     this.classed('critical', function(n) {
@@ -241,9 +290,13 @@ define([
                     });
                     this.select('h1').text(function(n) {
                         return n.title
+                    }).style('cursor', function(n) {
+                        return n.actionPayload ? 'pointer' : 'default';
                     });
                     this.select('h2').text(function(n) {
                         return n.message
+                    }).style('cursor', function(n) {
+                        return n.actionPayload ? 'pointer' : 'default';
                     });
 
                     if (forceAnimation || self.attr.animated !== false) {
@@ -291,4 +344,69 @@ define([
         };
 
     }
+
+    function collapseDuplicates(notifications) {
+        var grouped = _.groupBy(notifications, 'title'),
+            toAdd = [],
+            toCollapseIds = [];
+
+        _.each(grouped, function(list, title) {
+            var validToCollapse = list.length > 1 && _.all(list, function(n) {
+                return n.type === 'user' && !n.actionEvent && !n.actionPayload;
+            });
+            if (validToCollapse) {
+                var ids = _.pluck(list, 'id'),
+                    add = _.extend({}, list[0], {
+                        collapsedIds: ids,
+                        title: title + ' (' + list.length + ')',
+                        message: message(list)
+                    });
+
+                toAdd.push(add);
+                toCollapseIds = toCollapseIds.concat(ids);
+            }
+        })
+
+        return _.chain(notifications)
+            .reject(function(n) {
+                return _.contains(toCollapseIds, n.id)
+            })
+            .tap(function(list) {
+                toAdd.forEach(function(a) {
+                    list.push(a);
+                })
+            })
+            .value()
+
+        function message(notifications) {
+            var prefix = sharedPrefix(notifications);
+            return (prefix || '') + _.chain(notifications)
+                .map(function(n) {
+                    if (prefix && prefix.length) {
+                        return n.message.substring(prefix.length)
+                    }
+                    return n.message;
+                })
+                .compact()
+                .sortBy(function(s) {
+                    return s.toLowerCase();
+                })
+                .value().join(', ')
+        }
+
+        function sharedPrefix(notifications) {
+            var sorted = _.pluck(notifications, 'message').sort(),
+                first = _.first(sorted),
+                last = _.last(sorted),
+                firstLen = first.length,
+                i = 0;
+                if (_.isString(first) && _.isString(last)) {
+                    while (i < firstLen && first.charAt(i) === last.charAt(i)) {
+                        i++;
+                    }
+                    return first.substring(0, i);
+                }
+        }
+    }
+
 });

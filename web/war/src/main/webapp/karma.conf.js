@@ -1,3 +1,5 @@
+/* globals module:false process:false */
+/* eslint strict:0 */
 module.exports = function(config) {
 
     // karma start --coverage [coverageType]
@@ -14,31 +16,40 @@ module.exports = function(config) {
             // list of files / patterns to load in the browser
             files: [
 
+                // Babel polyfill
+                'libs/babel-polyfill/dist/polyfill.min.js',
+
                 // Source
                 {pattern: 'js/**/*.js', included: false},
+                {pattern: 'js/**/*.jsx', included: false},
 
                 // Templates
                 {pattern: 'js/**/*.ejs', included: false},
                 {pattern: 'js/**/*.hbs', included: false},
-                {pattern: 'test/**/*.json', included: false},
 
                 // Images
-                {pattern: 'img/**/*.*', included: false},
+                //{pattern: 'img/**/*.png', included: false},
                 {pattern: 'test/assets/*', included: false},
 
                 // Included libs
-                'libs/jquery/jquery.js',
-                'libs/jquery-ui/ui/jquery-ui.js',
-                'libs/bootstrap/docs/assets/js/bootstrap.js',
+                'libs/jquery/dist/jquery.js',
+                'libs/underscore/underscore.js',
+                'libs/@visallo/bootstrap/docs/assets/js/bootstrap.js',
 
                 // Libraries
                 {pattern: 'libs/**/*.js', included: false},
+                {pattern: 'node_modules/chai/chai.js', included: false},
+                {pattern: 'node_modules/chai-datetime/chai-datetime.js', included: false},
+                {pattern: 'node_modules/chai-spies/chai-spies.js', included: false},
+                {pattern: 'node_modules/chai-as-promised/lib/chai-as-promised.js', included: false},
 
                 // Test Files
                 {pattern: 'test/unit/spec/**/*.js', included: false},
+                {pattern: 'test/unit/spec/**/*.jsx', included: false},
 
                 // Test Mocks
                 {pattern: 'test/unit/mocks/**/*.js', included: false},
+                {pattern: 'test/unit/mocks/**/*.json', included: false},
                 {pattern: 'test/unit/utils/**/*.js', included: false},
 
                 // Test runner
@@ -49,12 +60,17 @@ module.exports = function(config) {
             exclude: [ ],
 
             proxies: {
-                '/resource': '/base/test/assets/resource'
+                '/resource': '/base/test/assets/resource',
+                '/vertex/thumbnail': '/base/test/assets/resource'
+            },
+
+            osxReporter: {
+                activate: 'com.apple.Terminal'
             },
 
             // test results reporter to use
             // possible values: 'dots', 'progress', 'junit', 'growl', 'coverage'
-            reporters: ['progress'],
+            reporters: ['mocha'],
 
             // web server port
             port: 9876,
@@ -84,7 +100,22 @@ module.exports = function(config) {
 
             // Continuous Integration mode
             // if true, it capture browsers, run tests and exit
-            singleRun: false
+            singleRun: false,
+
+            preprocessors: {
+                'js/**/*.js': ['babel'],
+                'js/**/*.jsx': ['babel'],
+                'test/unit/spec/**/*.js': ['babel'],
+                'test/**/*.jsx': ['babel']
+            },
+            babelPreprocessor: {
+                options: {
+                    sourceMap: true
+                },
+                filename: function(file) {
+                    return file.originalPath.replace(/\.jsx$/, '.js');
+                }
+            }
         },
         coverageType = 'html',
         coverage = process.argv.filter(function(a, index) {
@@ -98,13 +129,9 @@ module.exports = function(config) {
         }).length;
 
     if (coverage) {
-        karmaConfig.preprocessors = {
-            'js/*.js,!js/require.config.js': 'coverage',
-            'js/**/*.js': 'coverage'
-        };
-
+        karmaConfig.preprocessors['js/*.js,!js/require.config.js'] = 'coverage';
+        karmaConfig.preprocessors['js/**/*.js'] = 'coverage';
         karmaConfig.reporters.push('coverage');
-
         karmaConfig.coverageReporter = {
             type: coverageType,
             dir: 'build/coverage/'

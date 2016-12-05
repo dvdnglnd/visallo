@@ -6,7 +6,8 @@ define([
     'util/requirejs/promise!util/service/ontologyPromise',
     'configuration/plugins/registry',
     'require',
-    'd3-tip'
+    'd3-tip',
+    'deep-freeze-strict'
 ], function(
     withDataRequest,
     F,
@@ -15,18 +16,22 @@ define([
     ontology,
     registry,
     require,
-    d3tip) {
+    d3tip,
+    deepFreeze) {
     'use strict';
 
     var NO_DATA = 'NO_DATA_MARKER',
-        TO_MANY_BUCKETS = 'TOO_MANY_BUCKETS',
-        TO_MANY_BUCKETS_HISTOGRAM = 'TOO_MANY_BUCKETS_HISTOGRAM',
+        TOO_MANY_BUCKETS = 'TOO_MANY_BUCKETS',
+        TOO_MANY_BUCKETS_HISTOGRAM = 'TOO_MANY_BUCKETS_HISTOGRAM',
+        TOO_MANY_BUCKETS_GEOHASH = 'TOO_MANY_BUCKETS_GEOHASH',
         MAX_BUCKETS_BEFORE_ERROR = 150,
+        MAX_GEOHASH_BUCKETS_BEFORE_ERROR = 1024,
         TYPE_ELEMENTS = 'TYPE_ELEMENTS',
         TYPE_AGGREGATION = 'TYPE_AGGREGATION',
         TYPE_UNKNOWN = 'TYPE_UNKNOWN',
         FIELD_CONCEPT_TYPE = 'http://visallo.org#conceptType',
-        FIELD_EDGE_LABEL = '__edgeLabel';
+        FIELD_EDGE_LABEL = '__edgeLabel',
+        TIP_UNIQUE_IDENTIFIER = 0;
 
     return withRenderer;
 
@@ -79,12 +84,18 @@ define([
                             if (result.type === TYPE_AGGREGATION && (!_.isArray(result.root) || _.isEmpty(result.root[0].buckets))) {
                                 throw new Error(NO_DATA);
                             }
-                            if (result.type === TYPE_AGGREGATION && _.isArray(result.root) &&
-                                result.root[0].buckets.length > MAX_BUCKETS_BEFORE_ERROR) {
-                                if (result.root[0].type === 'histogram') {
-                                    throw new Error(TO_MANY_BUCKETS_HISTOGRAM);
+                            if (result.type === TYPE_AGGREGATION && _.isArray(result.root)) {
+                                var bucketCount = result.root[0].buckets.length,
+                                    aggregationType = result.root[0].type;
+
+                                if (aggregationType === 'geohash' && bucketCount > MAX_GEOHASH_BUCKETS_BEFORE_ERROR) {
+                                    throw new Error(TOO_MANY_BUCKETS_GEOHASH);
+                                } else if (aggregationType !== 'geohash' && bucketCount > MAX_BUCKETS_BEFORE_ERROR) {
+                                    if (aggregationType === 'histogram') {
+                                        throw new Error(TOO_MANY_BUCKETS_HISTOGRAM);
+                                    }
+                                    throw new Error(TOO_MANY_BUCKETS);
                                 }
-                                throw new Error(TO_MANY_BUCKETS);
                             }
                             if (_.isFunction(self.processData)) {
                                 return self.processData(frozen);
@@ -119,10 +130,13 @@ define([
                     if (error && error.message === NO_DATA) {
                         type = 'info';
                         message = 'no-data';
-                    } else if (error && error.message === TO_MANY_BUCKETS_HISTOGRAM) {
+                    } else if (error && error.message === TOO_MANY_BUCKETS_GEOHASH) {
+                        type = 'info';
+                        message = 'bucket-overload.geohash';
+                    } else if (error && error.message === TOO_MANY_BUCKETS_HISTOGRAM) {
                         type = 'info';
                         message = 'bucket-overload.histogram';
-                    } else if (error && error.message === TO_MANY_BUCKETS) {
+                    } else if (error && error.message === TOO_MANY_BUCKETS) {
                         type = 'info';
                         message = 'bucket-overload';
                     } else {
@@ -150,21 +164,27 @@ define([
                         .then(loadUsingData)
                 };
 
-            this.on('reflow', render);
+            this.on('reflow', function() {
+                Promise.resolve()
+                    .then(render)
+                    .catch(errorHandler)
+            });
             this.on('refreshData', function() {
                 this.$node.empty();
-                refresh();
+                Promise.resolve()
+                    .then(refresh)
+                    .catch(errorHandler)
             });
 
             var loadingPromise = this.attr.result ?
                 Promise.resolve(this.attr.result)
                     .then(setAggregations)
                     .then(loadUsingData) :
-                refresh();
+                refresh()
+                    .catch(errorHandler);
 
             loadingPromise
                 .catch(errorHandler)
-                .done();
 
             this.on('getReportResults', function() {
                 loadingPromise.then(function() {
@@ -303,10 +323,9 @@ define([
                         .append($('<h1>').text(titleFunction(d, i, n)))
                         .append($('<h2>').text(detailFunction(d, i, n)))
                         .html()
-                });
-
+                })
+                .attr('id', 'tip' + (TIP_UNIQUE_IDENTIFIER++));
             svg.call(tip);
-
             tip.show = _.wrap(tip.show, function(fn) {
                 var args = _.toArray(arguments).slice(1);
                 $('.dashboard-d3tip').empty();
@@ -440,19 +459,6 @@ define([
 
     function resultsIncludeAggregations(result) {
         return result && !_.isEmpty(result.aggregates);
-    }
-
-    function deepFreeze(o) {
-      Object.freeze(o);
-      Object.getOwnPropertyNames(o).forEach(function(prop) {
-        if (o.hasOwnProperty(prop) &&
-            o[prop] !== null &&
-            (typeof o[prop] === 'object' || typeof o[prop] === 'function') &&
-            !Object.isFrozen(o[prop])) {
-          deepFreeze(o[prop]);
-        }
-      });
-      return o;
     }
 });
 

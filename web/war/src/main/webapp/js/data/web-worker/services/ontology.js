@@ -2,8 +2,9 @@
 define([
     '../util/ajax',
     '../util/memoize',
+    '../store',
     'configuration/plugins/registry'
-], function(ajax, memoize, registry) {
+], function(ajax, memoize, store, registry) {
     'use strict';
 
     registry.documentExtensionPoint('org.visallo.ontology',
@@ -13,19 +14,22 @@ define([
         }
     );
 
-    var PARENT_CONCEPT = 'http://www.w3.org/2002/07/owl#Thing',
-        ROOT_CONCEPT = 'http://visallo.org#root',
-        getOntology = memoize(function() {
-            return ajax('GET', '/ontology')
-                .then(function(ontology) {
-                    return _.extend({}, ontology, {
-                        conceptsById: _.indexBy(ontology.concepts, 'id'),
-                        propertiesByTitle: _.indexBy(ontology.properties, 'title')
-                    });
-                });
-        }),
-        extensions = registry.extensionsForPoint('org.visallo.ontology'),
-        api = {
+    var PARENT_CONCEPT = 'http://www.w3.org/2002/07/owl#Thing';
+    var ROOT_CONCEPT = 'http://visallo.org#root';
+    var ontologyReady = function(s) {
+        return s &&
+        s.ontology &&
+        !_.isEmpty(s.ontology.concepts) &&
+        !_.isEmpty(s.ontology.properties) &&
+        !_.isEmpty(s.ontology.relationships);
+    }
+    var getOntology = function() {
+        return store.getOrWaitForNestedState(function(s) {
+            return JSON.parse(JSON.stringify(s.ontology));
+        }, ontologyReady)
+    }
+    var extensions = registry.extensionsForPoint('org.visallo.ontology');
+    var api = {
 
             ontology: memoize(function() {
                 return Promise.all([
@@ -46,11 +50,12 @@ define([
             }),
 
             properties: memoize(function() {
+
                 return getOntology()
                     .then(function(ontology) {
                         return {
-                            list: _.sortBy(ontology.properties, 'displayName'),
-                            byTitle: _.indexBy(ontology.properties, 'title'),
+                            list: _.sortBy(_.values(ontology.properties), 'displayName'),
+                            byTitle: ontology.properties,
                             byDataType: _.groupBy(ontology.properties, 'dataType'),
                             byDependentToCompound: _.chain(ontology.properties)
                                 .filter(function(p) {
@@ -65,6 +70,23 @@ define([
                                 .object()
                                 .value()
                         };
+                    })
+            }),
+
+            propertiesByDomainType: memoize(function(type) {
+                return getOntology()
+                    .then(function(ontology) {
+                        var items = (type === 'concept' || type === 'vertex') ? ontology.concepts : ontology.relationships;
+
+                        return _.chain(items)
+                            .pluck('properties')
+                            .compact()
+                            .flatten()
+                            .uniq()
+                            .map(function(propertyName) {
+                                return ontology.properties[propertyName]
+                            })
+                            .value();
                     });
             }),
 
@@ -73,7 +95,7 @@ define([
                     .then(function(ontology) {
                         var propertyIds = [],
                             collectPropertyIds = function(rId) {
-                                var relation = ontology.relationships.byTitle[rId],
+                                var relation = ontology.relationships.byId[rId],
                                 properties = relation && relation.properties,
                                 parentId = relation && relation.parentIri;
 
@@ -96,7 +118,7 @@ define([
 
                         return {
                             list: _.sortBy(properties, 'displayName'),
-                            byTitle: _.indexBy(properties, 'title')
+                            byTitle: _.pick(ontology.properties, propertyIds)
                         };
                     });
             }),
@@ -106,7 +128,7 @@ define([
                     .then(function(ontology) {
                         var propertyIds = [],
                             collectPropertyIds = function(conceptId) {
-                                var concept = ontology.conceptsById[conceptId],
+                                var concept = ontology.concepts[conceptId],
                                 properties = concept && concept.properties,
                                 parentConceptId = concept && concept.parentConcept;
 
@@ -123,13 +145,13 @@ define([
                         var properties = _.chain(propertyIds)
                             .uniq()
                             .map(function(pId) {
-                                return ontology.propertiesByTitle[pId];
+                                return ontology.properties[pId];
                             })
                             .value();
 
                         return {
                             list: _.sortBy(properties, 'displayName'),
-                            byTitle: _.indexBy(properties, 'title')
+                            byTitle: _.pick(ontology.properties, propertyIds)
                         };
                     });
             }),
@@ -142,21 +164,21 @@ define([
                         return {
                             entityConcept: buildTree(
                                 ontology.concepts,
-                                _.findWhere(ontology.concepts, {id: PARENT_CONCEPT})
+                                ontology.concepts[PARENT_CONCEPT]
                             ),
-                            forAdmin: _.chain(ontology.conceptsById)
-                                .filter(onlyEntityConcepts.bind(null, ontology.conceptsById, true))
-                                .map(addFlattenedTitles.bind(null, ontology.conceptsById, true))
+                            forAdmin: _.chain(ontology.concepts)
+                                .filter(onlyEntityConcepts.bind(null, ontology.concepts, true))
+                                .map(addFlattenedTitles.bind(null, ontology.concepts, true))
                                 .sortBy('flattenedDisplayName')
                                 .value(),
                             byId: _.chain(ontology.concepts)
-                                .map(addFlattenedTitles.bind(null, ontology.conceptsById, false))
+                                .map(addFlattenedTitles.bind(null, ontology.concepts, false))
                                 .indexBy('id')
                                 .value(),
                             byClassName: _.indexBy(ontology.concepts, 'className'),
                             byTitle: _.chain(ontology.concepts)
-                                .filter(onlyEntityConcepts.bind(null, ontology.conceptsById, false))
-                                .map(addFlattenedTitles.bind(null, ontology.conceptsById, false))
+                                .filter(onlyEntityConcepts.bind(null, ontology.concepts, false))
+                                .map(addFlattenedTitles.bind(null, ontology.concepts, false))
                                 .sortBy('flattenedDisplayName')
                                 .value()
                         };
@@ -172,7 +194,7 @@ define([
                         findChildrenForNode = function(node) {
                             node.className = 'conceptId-' + (clsIndex++);
                             node.children = groupedByParent[node.id] || [];
-                            node.children.forEach(function(child) {
+                            node.children = node.children.map(function(child) {
                                 if (!child.glyphIconHref) {
                                     child.glyphIconHref = node.glyphIconHref;
                                 }
@@ -182,19 +204,8 @@ define([
                                 if (!child.color) {
                                     if (node.color) {
                                         child.color = node.color;
-                                    } else if (
-                                        [
-                                            'http://visallo.org/longRunningProcess#longRunningProcess',
-                                            'http://visallo.org/ping#ping',
-                                            'http://visallo.org/search#savedSearch',
-                                            'http://visallo.org/termMention#termMention',
-                                            'http://visallo.org/user#user',
-                                            'http://visallo.org/workspace#dashboard',
-                                            'http://visallo.org/workspace#dashboardItem',
-                                            'http://visallo.org/workspace#workspace'
-                                        ].indexOf(child.id) === -1
-                                    ) {
-                                        if (!_.contains(ignoreColorWarnings, child.id)) {
+                                    } else {
+                                        if (!_.contains(ignoreColorWarnings, child.id) && child.userVisible !== false) {
                                             console.warn(
                                                 'No color specified in concept hierarchy for conceptType:',
                                                 child.id
@@ -203,13 +214,12 @@ define([
                                         child.color = 'rgb(0, 0, 0)';
                                     }
                                 }
-                                findChildrenForNode(child);
+                                return findChildrenForNode(child);
                             });
+                            return node;
                         };
 
-                    findChildrenForNode(root);
-
-                    return root;
+                    return findChildrenForNode(root);
                 }
 
                 function onlyEntityConcepts(conceptsById, includeThing, concept) {
@@ -267,8 +277,8 @@ define([
             relationships: memoize(function() {
                 return Promise.all([api.concepts(), getOntology()])
                     .then(function(results) {
-                        var concepts = results[0],
-                            ontology = results[1],
+                        var concepts = results.shift(),
+                            ontology = results.shift(),
                             conceptIriIsVisible = function(iri) {
                                 var concept = concepts.byId[iri];
                                 return concept && concept.userVisible !== false;
@@ -284,8 +294,8 @@ define([
 
                         return {
                             list: list,
-                            byId: _.indexBy(ontology.relationships, 'id'),
-                            byTitle: _.indexBy(ontology.relationships, 'title'),
+                            byId: ontology.relationships,
+                            byTitle: ontology.relationships,
                             groupedBySourceDestConcepts: conceptGrouping(concepts, list, groupedByRelated),
                             groupedByRelatedConcept: groupedByRelated
                         };

@@ -1,7 +1,10 @@
 package org.visallo.core.model.properties;
 
+import org.visallo.core.exception.VisalloException;
 import org.visallo.core.model.properties.types.*;
 import org.visallo.core.model.termMention.TermMentionForProperty;
+
+import java.lang.reflect.Field;
 
 public class VisalloProperties {
     public static final String CONCEPT_TYPE_THING = "http://www.w3.org/2002/07/owl#Thing";
@@ -12,6 +15,7 @@ public class VisalloProperties {
     public static final StringMetadataVisalloProperty TEXT_DESCRIPTION_METADATA = new StringMetadataVisalloProperty("http://visallo.org#textDescription");
     public static final StringMetadataVisalloProperty MIME_TYPE_METADATA = new StringMetadataVisalloProperty("http://visallo.org#mimeType");
     public static final StringMetadataVisalloProperty SOURCE_FILE_NAME_METADATA = new StringMetadataVisalloProperty("http://visallo.org#sourceFileName");
+    public static final StringMetadataVisalloProperty LINK_TITLE_METADATA = new StringMetadataVisalloProperty("http://visallo.org#linkTitle");
     public static final LongMetadataVisalloProperty SOURCE_FILE_OFFSET_METADATA = new LongMetadataVisalloProperty("http://visallo.org#sourceFileOffset");
 
     public static final DateSingleValueVisalloProperty MODIFIED_DATE = new DateSingleValueVisalloProperty("http://visallo.org#modifiedDate");
@@ -45,6 +49,7 @@ public class VisalloProperties {
     public static final StringVisalloProperty SOURCE_URL = new StringVisalloProperty("http://visallo.org#sourceUrl");
     public static final StringVisalloProperty TITLE = new StringVisalloProperty("http://visallo.org#title");
     public static final StringVisalloProperty COMMENT = new StringVisalloProperty("http://visallo.org/comment#entry");
+    public static final StringMetadataVisalloProperty COMMENT_PATH_METADATA = new StringMetadataVisalloProperty("http://visallo.org/comment#path");
 
     public static final DetectedObjectProperty DETECTED_OBJECT = new DetectedObjectProperty("http://visallo.org#detectedObject");
 
@@ -52,6 +57,7 @@ public class VisalloProperties {
     public static final LongSingleValueVisalloProperty TERM_MENTION_END_OFFSET = new LongSingleValueVisalloProperty("http://visallo.org/termMention#endOffset");
     public static final StringSingleValueVisalloProperty TERM_MENTION_PROCESS = new StringSingleValueVisalloProperty("http://visallo.org/termMention#process");
     public static final StringSingleValueVisalloProperty TERM_MENTION_PROPERTY_KEY = new StringSingleValueVisalloProperty("http://visallo.org/termMention#propertyKey");
+    public static final StringSingleValueVisalloProperty TERM_MENTION_PROPERTY_NAME = new StringSingleValueVisalloProperty("http://visallo.org/termMention#propertyName");
     public static final StringSingleValueVisalloProperty TERM_MENTION_RESOLVED_EDGE_ID = new StringSingleValueVisalloProperty("http://visallo.org/termMention#resolvedEdgeId");
     public static final StringSingleValueVisalloProperty TERM_MENTION_TITLE = new StringSingleValueVisalloProperty("http://visallo.org/termMention#title");
     public static final StringSingleValueVisalloProperty TERM_MENTION_CONCEPT_TYPE = new StringSingleValueVisalloProperty("http://visallo.org/termMention#conceptType");
@@ -67,5 +73,25 @@ public class VisalloProperties {
 
     private VisalloProperties() {
         throw new UnsupportedOperationException("do not construct utility class");
+    }
+
+    public static boolean isBuiltInProperty(String propertyName) {
+        return isBuiltInProperty(VisalloProperties.class, propertyName);
+    }
+
+    public static boolean isBuiltInProperty(Class propertiesClass, String propertyName) {
+        for (Field field : propertiesClass.getFields()) {
+            try {
+                Object fieldValue = field.get(null);
+                if (fieldValue instanceof VisalloPropertyBase) {
+                    if (((VisalloPropertyBase) fieldValue).getPropertyName().equals(propertyName)) {
+                        return true;
+                    }
+                }
+            } catch (IllegalAccessException e) {
+                throw new VisalloException("Could not get field: " + field, e);
+            }
+        }
+        return false;
     }
 }

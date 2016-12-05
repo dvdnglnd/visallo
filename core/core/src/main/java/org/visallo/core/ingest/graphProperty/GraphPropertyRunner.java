@@ -1,11 +1,11 @@
 package org.visallo.core.ingest.graphProperty;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.inject.Inject;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.StringUtils;
-import org.json.JSONObject;
 import org.vertexium.*;
 import org.vertexium.property.StreamingPropertyValue;
 import org.vertexium.util.IterableUtils;
@@ -15,18 +15,18 @@ import org.visallo.core.exception.VisalloException;
 import org.visallo.core.model.WorkQueueNames;
 import org.visallo.core.model.WorkerBase;
 import org.visallo.core.model.properties.VisalloProperties;
+import org.visallo.core.model.user.AuthorizationRepository;
 import org.visallo.core.model.user.UserRepository;
+import org.visallo.core.model.workQueue.Priority;
 import org.visallo.core.model.workQueue.WorkQueueRepository;
 import org.visallo.core.security.VisibilityTranslator;
+import org.visallo.core.status.MetricsManager;
 import org.visallo.core.status.StatusRepository;
 import org.visallo.core.status.StatusServer;
 import org.visallo.core.status.model.GraphPropertyRunnerStatus;
 import org.visallo.core.status.model.ProcessStatus;
 import org.visallo.core.user.User;
-import org.visallo.core.util.ServiceLoaderUtil;
-import org.visallo.core.util.TeeInputStream;
-import org.visallo.core.util.VisalloLogger;
-import org.visallo.core.util.VisalloLoggerFactory;
+import org.visallo.core.util.*;
 
 import java.io.*;
 import java.util.ArrayList;
@@ -37,9 +37,10 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.vertexium.util.IterableUtils.toList;
 
-public class GraphPropertyRunner extends WorkerBase {
+public class GraphPropertyRunner extends WorkerBase<GraphPropertyWorkerItem> {
     private static final VisalloLogger LOGGER = VisalloLoggerFactory.getLogger(GraphPropertyRunner.class);
     private final StatusRepository statusRepository;
+    private final AuthorizationRepository authorizationRepository;
     private Graph graph;
     private Authorizations authorizations;
     private List<GraphPropertyThreadedWrapper> workerWrappers = Lists.newArrayList();
@@ -49,26 +50,37 @@ public class GraphPropertyRunner extends WorkerBase {
     private Configuration configuration;
     private VisibilityTranslator visibilityTranslator;
     private AtomicLong lastProcessedPropertyTime = new AtomicLong(0);
+    private List<GraphPropertyWorker> graphPropertyWorkers = Lists.newArrayList();
+    private boolean prepareWorkersCalled;
 
     @Inject
     protected GraphPropertyRunner(
             WorkQueueRepository workQueueRepository,
             StatusRepository statusRepository,
-            Configuration configuration
+            Configuration configuration,
+            MetricsManager metricsManager,
+            AuthorizationRepository authorizationRepository
     ) {
-        super(workQueueRepository, configuration);
+        super(workQueueRepository, configuration, metricsManager);
         this.statusRepository = statusRepository;
+        this.authorizationRepository = authorizationRepository;
     }
 
     @Override
-    public void process(Object messageId, JSONObject json) throws Exception {
-        GraphPropertyMessage message = new GraphPropertyMessage(json);
-        if (!message.isValid()) {
-            throw new VisalloException(String.format("Cannot process unknown type of gpw message %s", json.toString()));
-        } else if (message.canHandleByProperty()) {
-            safeExecuteHandlePropertyOnElements(message);
+    protected GraphPropertyWorkerItem tupleDataToWorkerItem(byte[] data) {
+        GraphPropertyMessage message = GraphPropertyMessage.create(data);
+        return new GraphPropertyWorkerItem(message, getElements(message));
+    }
+
+    @Override
+    public void process(GraphPropertyWorkerItem workerItem) throws Exception {
+        GraphPropertyMessage message = workerItem.getMessage();
+        if (message.getProperties() != null && message.getProperties().length > 0) {
+            safeExecuteHandlePropertiesOnElements(workerItem);
+        } else if (message.getPropertyName() != null) {
+            safeExecuteHandlePropertyOnElements(workerItem);
         } else {
-            safeExecuteHandleAllEntireElements(message);
+            safeExecuteHandleAllEntireElements(workerItem);
         }
     }
 
@@ -78,11 +90,17 @@ public class GraphPropertyRunner extends WorkerBase {
 
     public void prepare(User user, GraphPropertyWorkerInitializer repository) {
         setUser(user);
-        setAuthorizations(this.userRepository.getAuthorizations(user));
+        setAuthorizations(authorizationRepository.getGraphAuthorizations(user));
         prepareWorkers(repository);
+        this.getWorkQueueRepository().setGraphPropertyRunner(this);
     }
 
     public void prepareWorkers(GraphPropertyWorkerInitializer initializer) {
+        if (prepareWorkersCalled) {
+            throw new VisalloException("prepareWorkers should be called only once");
+        }
+        prepareWorkersCalled = true;
+
         List<TermMentionFilter> termMentionFilters = loadTermMentionFilters();
 
         GraphPropertyWorkerPrepareData workerPrepareData = new GraphPropertyWorkerPrepareData(
@@ -90,8 +108,12 @@ public class GraphPropertyRunner extends WorkerBase {
                 termMentionFilters,
                 this.user,
                 this.authorizations,
-                InjectHelper.getInjector());
-        Collection<GraphPropertyWorker> workers = InjectHelper.getInjectedServices(GraphPropertyWorker.class, configuration);
+                InjectHelper.getInjector()
+        );
+        Collection<GraphPropertyWorker> workers = InjectHelper.getInjectedServices(
+                GraphPropertyWorker.class,
+                configuration
+        );
         for (GraphPropertyWorker worker : workers) {
             try {
                 LOGGER.debug("verifying: %s", worker.getClass().getName());
@@ -132,9 +154,11 @@ public class GraphPropertyRunner extends WorkerBase {
         }
 
         this.addGraphPropertyThreadedWrappers(wrappers);
+        this.graphPropertyWorkers.addAll(workers);
 
         if (failedToPrepareAtLeastOneGraphPropertyWorker) {
-            throw new VisalloException("Failed to initialize at least one graph property worker. See the log for more details.");
+            throw new VisalloException(
+                    "Failed to initialize at least one graph property worker. See the log for more details.");
         }
     }
 
@@ -154,12 +178,18 @@ public class GraphPropertyRunner extends WorkerBase {
                 InjectHelper.getInjector()
         );
 
-        List<TermMentionFilter> termMentionFilters = toList(ServiceLoaderUtil.load(TermMentionFilter.class, configuration));
+        List<TermMentionFilter> termMentionFilters = toList(ServiceLoaderUtil.load(
+                TermMentionFilter.class,
+                configuration
+        ));
         for (TermMentionFilter termMentionFilter : termMentionFilters) {
             try {
                 termMentionFilter.prepare(termMentionFilterPrepareData);
             } catch (Exception ex) {
-                throw new VisalloException("Could not initialize term mention filter: " + termMentionFilter.getClass().getName(), ex);
+                throw new VisalloException(
+                        "Could not initialize term mention filter: " + termMentionFilter.getClass().getName(),
+                        ex
+                );
             }
         }
         return termMentionFilters;
@@ -179,10 +209,9 @@ public class GraphPropertyRunner extends WorkerBase {
         };
     }
 
-    private void safeExecuteHandleAllEntireElements(GraphPropertyMessage message) throws Exception {
-        List<Element> elements = getElement(message);
-        for (Element element : elements) {
-            safeExecuteHandleEntireElement(element, message);
+    private void safeExecuteHandleAllEntireElements(GraphPropertyWorkerItem workerItem) throws Exception {
+        for (Element element : workerItem.getElements()) {
+            safeExecuteHandleEntireElement(element, workerItem.getMessage());
         }
     }
 
@@ -193,13 +222,18 @@ public class GraphPropertyRunner extends WorkerBase {
         }
     }
 
-    private List<Element> getVerticesFromMessage(GraphPropertyMessage message) {
-        List<Element> vertices = Lists.newLinkedList();
+    private ImmutableList<Element> getVerticesFromMessage(GraphPropertyMessage message) {
+        ImmutableList.Builder<Element> vertices = ImmutableList.builder();
 
-        for (String vertexId : message.getVertexIds()) {
+        for (String vertexId : message.getGraphVertexId()) {
             Vertex vertex;
             if (message.getStatus() == ElementOrPropertyStatus.DELETION || message.getStatus() == ElementOrPropertyStatus.HIDDEN) {
-                vertex = graph.getVertex(vertexId, FetchHint.ALL, message.getBeforeActionTimestamp(), this.authorizations);
+                vertex = graph.getVertex(
+                        vertexId,
+                        FetchHint.ALL,
+                        message.getBeforeActionTimestamp(),
+                        this.authorizations
+                );
             } else {
                 vertex = graph.getVertex(vertexId, this.authorizations);
             }
@@ -209,13 +243,13 @@ public class GraphPropertyRunner extends WorkerBase {
                 LOGGER.warn("Could not find vertex with id %s", vertexId);
             }
         }
-        return vertices;
+        return vertices.build();
     }
 
-    private List<Element> getEdgesFromMessage(GraphPropertyMessage message) {
-        List<Element> edges = Lists.newLinkedList();
+    private ImmutableList<Element> getEdgesFromMessage(GraphPropertyMessage message) {
+        ImmutableList.Builder<Element> edges = ImmutableList.builder();
 
-        for (String edgeId : message.getEdgeIds()) {
+        for (String edgeId : message.getGraphEdgeId()) {
             Edge edge;
             if (message.getStatus() == ElementOrPropertyStatus.DELETION || message.getStatus() == ElementOrPropertyStatus.HIDDEN) {
                 edge = graph.getEdge(edgeId, FetchHint.ALL, message.getBeforeActionTimestamp(), this.authorizations);
@@ -228,16 +262,54 @@ public class GraphPropertyRunner extends WorkerBase {
                 LOGGER.warn("Could not find edge with id %s", edgeId);
             }
         }
-        return edges;
+        return edges.build();
     }
 
     private boolean doesExist(Element element) {
         return element != null;
     }
 
-    private void safeExecuteHandlePropertyOnElements(GraphPropertyMessage message) throws Exception {
-        List<Element> elements = getElement(message);
-        for (Element element : elements) {
+    private void safeExecuteHandlePropertiesOnElements(GraphPropertyWorkerItem workerItem) throws Exception {
+        GraphPropertyMessage message = workerItem.getMessage();
+        for (Element element : workerItem.getElements()) {
+            for (GraphPropertyMessage.Property propertyMessage : message.getProperties()) {
+                Property property = null;
+                String propertyKey = propertyMessage.getPropertyKey();
+                String propertyName = propertyMessage.getPropertyName();
+                if (StringUtils.isNotEmpty(propertyKey) || StringUtils.isNotEmpty(propertyName)) {
+                    if (propertyKey == null) {
+                        property = element.getProperty(propertyName);
+                    } else {
+                        property = element.getProperty(propertyKey, propertyName);
+                    }
+
+                    if (property == null) {
+                        LOGGER.error(
+                                "Could not find property [%s]:[%s] on vertex with id %s",
+                                propertyKey,
+                                propertyName,
+                                element.getId()
+                        );
+                        continue;
+                    }
+                }
+
+                safeExecuteHandlePropertyOnElement(
+                        element,
+                        property,
+                        message.getWorkspaceId(),
+                        message.getVisibilitySource(),
+                        message.getPriority(),
+                        propertyMessage.getStatus(),
+                        propertyMessage.getBeforeActionTimestampOrDefault()
+                );
+            }
+        }
+    }
+
+    private void safeExecuteHandlePropertyOnElements(GraphPropertyWorkerItem workerItem) throws Exception {
+        GraphPropertyMessage message = workerItem.getMessage();
+        for (Element element : workerItem.getElements()) {
             Property property = null;
             if (StringUtils.isNotEmpty(message.getPropertyKey()) || StringUtils.isNotEmpty(message.getPropertyName())) {
                 if (message.getPropertyKey() == null) {
@@ -247,7 +319,12 @@ public class GraphPropertyRunner extends WorkerBase {
                 }
 
                 if (property == null) {
-                    LOGGER.error("Could not find property [%s]:[%s] on vertex with id %s", message.getPropertyKey(), message.getPropertyName(), element.getId());
+                    LOGGER.error(
+                            "Could not find property [%s]:[%s] on vertex with id %s",
+                            message.getPropertyKey(),
+                            message.getPropertyName(),
+                            element.getId()
+                    );
                     continue;
                 }
             }
@@ -256,9 +333,32 @@ public class GraphPropertyRunner extends WorkerBase {
         }
     }
 
-    private void safeExecuteHandlePropertyOnElement(Element element, Property property, GraphPropertyMessage message) throws Exception {
+    private void safeExecuteHandlePropertyOnElement(
+            Element element,
+            Property property,
+            GraphPropertyMessage message
+    ) throws Exception {
+        safeExecuteHandlePropertyOnElement(
+                element,
+                property,
+                message.getWorkspaceId(),
+                message.getVisibilitySource(),
+                message.getPriority(),
+                message.getStatus(),
+                message.getBeforeActionTimestampOrDefault()
+        );
+    }
+
+    private void safeExecuteHandlePropertyOnElement(
+            Element element,
+            Property property,
+            String workspaceId,
+            String visibilitySource,
+            Priority priority,
+            ElementOrPropertyStatus status,
+            long beforeActionTimestamp
+    ) throws Exception {
         String propertyText = getPropertyText(property);
-        ElementOrPropertyStatus status = message.getStatus();
 
         List<GraphPropertyThreadedWrapper> interestedWorkerWrappers = findInterestedWorkers(element, property, status);
         if (interestedWorkerWrappers.size() == 0) {
@@ -288,9 +388,10 @@ public class GraphPropertyRunner extends WorkerBase {
                 visibilityTranslator,
                 element,
                 property,
-                message.getWorkspaceId(),
-                message.getVisibilitySource(),
-                message.getPriority(),
+                workspaceId,
+                visibilitySource,
+                priority,
+                beforeActionTimestamp,
                 status
         );
 
@@ -313,7 +414,10 @@ public class GraphPropertyRunner extends WorkerBase {
         return property == null ? "[none]" : (property.getKey() + ":" + property.getName());
     }
 
-    private void safeExecuteNonStreamingProperty(List<GraphPropertyThreadedWrapper> interestedWorkerWrappers, GraphPropertyWorkData workData) throws Exception {
+    private void safeExecuteNonStreamingProperty(
+            List<GraphPropertyThreadedWrapper> interestedWorkerWrappers,
+            GraphPropertyWorkData workData
+    ) throws Exception {
         for (GraphPropertyThreadedWrapper interestedWorkerWrapper1 : interestedWorkerWrappers) {
             interestedWorkerWrapper1.enqueueWork(null, workData);
         }
@@ -323,7 +427,11 @@ public class GraphPropertyRunner extends WorkerBase {
         }
     }
 
-    private void safeExecuteStreamingPropertyValue(List<GraphPropertyThreadedWrapper> interestedWorkerWrappers, GraphPropertyWorkData workData, StreamingPropertyValue streamingPropertyValue) throws Exception {
+    private void safeExecuteStreamingPropertyValue(
+            List<GraphPropertyThreadedWrapper> interestedWorkerWrappers,
+            GraphPropertyWorkData workData,
+            StreamingPropertyValue streamingPropertyValue
+    ) throws Exception {
         String[] workerNames = graphPropertyThreadedWrapperToNames(interestedWorkerWrappers);
         InputStream in = streamingPropertyValue.getInputStream();
         File tempFile = null;
@@ -380,14 +488,21 @@ public class GraphPropertyRunner extends WorkerBase {
         return false;
     }
 
-    private List<GraphPropertyThreadedWrapper> findInterestedWorkers(Element element, Property property, ElementOrPropertyStatus status) {
-        Set<String> graphPropertyWorkerWhiteList = IterableUtils.toSet(VisalloProperties.GRAPH_PROPERTY_WORKER_WHITE_LIST.getPropertyValues(element));
-        Set<String> graphPropertyWorkerBlackList = IterableUtils.toSet(VisalloProperties.GRAPH_PROPERTY_WORKER_BLACK_LIST.getPropertyValues(element));
+    private List<GraphPropertyThreadedWrapper> findInterestedWorkers(
+            Element element,
+            Property property,
+            ElementOrPropertyStatus status
+    ) {
+        Set<String> graphPropertyWorkerWhiteList = IterableUtils.toSet(VisalloProperties.GRAPH_PROPERTY_WORKER_WHITE_LIST.getPropertyValues(
+                element));
+        Set<String> graphPropertyWorkerBlackList = IterableUtils.toSet(VisalloProperties.GRAPH_PROPERTY_WORKER_BLACK_LIST.getPropertyValues(
+                element));
 
         List<GraphPropertyThreadedWrapper> interestedWorkers = new ArrayList<>();
         for (GraphPropertyThreadedWrapper wrapper : workerWrappers) {
             String graphPropertyWorkerName = wrapper.getWorker().getClass().getName();
-            if (graphPropertyWorkerWhiteList.size() > 0 && !graphPropertyWorkerWhiteList.contains(graphPropertyWorkerName)) {
+            if (graphPropertyWorkerWhiteList.size() > 0 && !graphPropertyWorkerWhiteList.contains(
+                    graphPropertyWorkerName)) {
                 continue;
             }
             if (graphPropertyWorkerBlackList.contains(graphPropertyWorkerName)) {
@@ -408,19 +523,37 @@ public class GraphPropertyRunner extends WorkerBase {
         return interestedWorkers;
     }
 
-    private void addDeletedWorkers(List<GraphPropertyThreadedWrapper> interestedWorkers, GraphPropertyWorker worker, GraphPropertyThreadedWrapper wrapper, Element element, Property property) {
+    private void addDeletedWorkers(
+            List<GraphPropertyThreadedWrapper> interestedWorkers,
+            GraphPropertyWorker worker,
+            GraphPropertyThreadedWrapper wrapper,
+            Element element,
+            Property property
+    ) {
         if (worker.isDeleteHandled(element, property)) {
             interestedWorkers.add(wrapper);
         }
     }
 
-    private void addHiddenWorkers(List<GraphPropertyThreadedWrapper> interestedWorkers, GraphPropertyWorker worker, GraphPropertyThreadedWrapper wrapper, Element element, Property property) {
+    private void addHiddenWorkers(
+            List<GraphPropertyThreadedWrapper> interestedWorkers,
+            GraphPropertyWorker worker,
+            GraphPropertyThreadedWrapper wrapper,
+            Element element,
+            Property property
+    ) {
         if (worker.isHiddenHandled(element, property)) {
             interestedWorkers.add(wrapper);
         }
     }
 
-    private void addUnhiddenWorkers(List<GraphPropertyThreadedWrapper> interestedWorkers, GraphPropertyWorker worker, GraphPropertyThreadedWrapper wrapper, Element element, Property property) {
+    private void addUnhiddenWorkers(
+            List<GraphPropertyThreadedWrapper> interestedWorkers,
+            GraphPropertyWorker worker,
+            GraphPropertyThreadedWrapper wrapper,
+            Element element,
+            Property property
+    ) {
         if (worker.isUnhiddenHandled(element, property)) {
             interestedWorkers.add(wrapper);
         }
@@ -434,20 +567,23 @@ public class GraphPropertyRunner extends WorkerBase {
         return names;
     }
 
-    private List<Element> getElement(GraphPropertyMessage message) {
-        if (message.canHandleVertex()) {
-            return getVerticesFromMessage(message);
-        } else if (message.canHandleEdge()) {
-            return getEdgesFromMessage(message);
-        } else {
-            throw new VisalloException(String.format("Could not find %s or %s", GraphPropertyMessage.GRAPH_VERTEX_ID, GraphPropertyMessage.GRAPH_EDGE_ID));
+    private ImmutableList<Element> getElements(GraphPropertyMessage message) {
+        ImmutableList.Builder<Element> results = ImmutableList.builder();
+        if (message.getGraphVertexId() != null && message.getGraphVertexId().length > 0) {
+            results.addAll(getVerticesFromMessage(message));
         }
+        if (message.getGraphEdgeId() != null && message.getGraphEdgeId().length > 0) {
+            results.addAll(getEdgesFromMessage(message));
+        }
+        return results.build();
     }
 
     public void shutdown() {
         for (GraphPropertyThreadedWrapper wrapper : this.workerWrappers) {
             wrapper.stop();
         }
+
+        super.stop();
     }
 
     public UserRepository getUserRepository() {
@@ -499,5 +635,93 @@ public class GraphPropertyRunner extends WorkerBase {
     @Override
     protected String getQueueName() {
         return workQueueNames.getGraphPropertyQueueName();
+    }
+
+    public boolean isStarted() {
+        return this.shouldRun();
+    }
+
+    public boolean canHandle(Element element, String propertyKey, String propertyName) {
+        if (!this.isStarted()) {
+            //we are probably on a server and want to submit it to the architecture
+            return true;
+        }
+
+        Property property = element.getProperty(propertyKey, propertyName);
+
+        for (GraphPropertyWorker worker : this.getAllGraphPropertyWorkers()) {
+            try {
+                if (worker.isHandled(element, property)) {
+                    return true;
+                } else if (worker.isDeleteHandled(element, property)) {
+                    return true;
+                } else if (worker.isHiddenHandled(element, property)) {
+                    return true;
+                } else if (worker.isUnhiddenHandled(element, property)) {
+                    return true;
+                }
+            } catch (Throwable t) {
+                LOGGER.warn(
+                        "Error checking to see if workers will handle graph property message.  Queueing anyways in case there was just a local error",
+                        t
+                );
+                return true;
+            }
+        }
+
+        LOGGER.debug(
+                "No interested workers for %s %s %s so did not queue it",
+                element.getId(),
+                propertyKey,
+                propertyName
+        );
+
+        return false;
+    }
+
+    private Collection<GraphPropertyWorker> getAllGraphPropertyWorkers() {
+        return Lists.newArrayList(this.graphPropertyWorkers);
+    }
+
+    public static List<StoppableRunnable> startThreaded(int threadCount, User user) {
+        List<StoppableRunnable> stoppables = new ArrayList<>();
+
+        LOGGER.info("Starting GraphPropertyRunners on %d threads", threadCount);
+        for (int i = 0; i < threadCount; i++) {
+            StoppableRunnable stoppable = new StoppableRunnable() {
+                private GraphPropertyRunner graphPropertyRunner = null;
+
+                @Override
+                public void run() {
+                    try {
+                        graphPropertyRunner = InjectHelper.getInstance(GraphPropertyRunner.class);
+                        graphPropertyRunner.prepare(user);
+                        graphPropertyRunner.run();
+                    } catch (Exception ex) {
+                        LOGGER.error("Failed running GraphPropertyRunner", ex);
+                    }
+                }
+
+                @Override
+                public void stop() {
+                    try {
+                        if (graphPropertyRunner != null) {
+                            LOGGER.debug("Stopping GraphPropertyRunner");
+                            graphPropertyRunner.stop();
+                        }
+                    } catch (Exception ex) {
+                        LOGGER.error("Failed stopping GraphPropertyRunner", ex);
+                    }
+                }
+            };
+            stoppables.add(stoppable);
+            Thread t = new Thread(stoppable);
+            t.setName("graph-property-runner-" + t.getId());
+            t.setDaemon(true);
+            LOGGER.debug("Starting GraphPropertyRunner thread: %s", t.getName());
+            t.start();
+        }
+
+        return stoppables;
     }
 }

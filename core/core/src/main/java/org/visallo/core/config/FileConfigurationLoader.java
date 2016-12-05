@@ -48,7 +48,7 @@ public class FileConfigurationLoader extends ConfigurationLoader {
     }
 
     public Configuration createConfiguration() {
-        final Map<String, String> properties = new HashMap<>();
+        final Map<String, String> properties = getDefaultProperties();
         List<File> configDirectories = getVisalloDirectoriesFromLeastPriority("config");
         if (configDirectories.size() == 0) {
             throw new VisalloException("Could not find any valid config directories.");
@@ -62,6 +62,18 @@ public class FileConfigurationLoader extends ConfigurationLoader {
         return new Configuration(this, properties);
     }
 
+    private Map<String, String> getDefaultProperties() {
+        Map<String, String> defaultProperties = new HashMap<>(getInitParameters());
+
+        List<File> configDirs = getVisalloDirectoriesFromMostPriority("config");
+        if (configDirs.size() > 0) {
+            String visalloDir = configDirs.get(0).getParentFile().getAbsolutePath();
+            defaultProperties.put(ENV_VISALLO_DIR, visalloDir);
+        }
+
+        return defaultProperties;
+    }
+
     public static List<File> getVisalloDirectoriesFromMostPriority(String subDirectory) {
         List<File> results = new ArrayList<>();
 
@@ -71,7 +83,11 @@ public class FileConfigurationLoader extends ConfigurationLoader {
                 case AppData:
                     String appData = System.getProperty("appdata");
                     if (appData != null && appData.length() > 0) {
-                        addVisalloSubDirectory(results, new File(new File(appData), "Visallo").getAbsolutePath(), subDirectory);
+                        addVisalloSubDirectory(
+                                results,
+                                new File(new File(appData), "Visallo").getAbsolutePath(),
+                                subDirectory
+                        );
                     }
                     break;
 
@@ -86,7 +102,11 @@ public class FileConfigurationLoader extends ConfigurationLoader {
                 case UserHome:
                     String userHome = System.getProperty("user.home");
                     if (userHome != null && userHome.length() > 0) {
-                        addVisalloSubDirectory(results, new File(new File(userHome), ".visallo").getAbsolutePath(), subDirectory);
+                        addVisalloSubDirectory(
+                                results,
+                                new File(new File(userHome), ".visallo").getAbsolutePath(),
+                                subDirectory
+                        );
                     }
                     break;
 

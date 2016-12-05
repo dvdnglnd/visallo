@@ -3,13 +3,15 @@ define([
     'hbs!./histogramTpl',
     'd3',
     'util/withDataRequest',
-    'colorjs'
+    'colorjs',
+    'data/web-worker/store/product/selectors'
 ], function(
     defineComponent,
     template,
     d3,
     withDataRequest,
-    Color) {
+    Color,
+    productSelectors) {
     'use strict';
 
     var HEIGHT = 100,
@@ -38,6 +40,12 @@ define([
             includeYAxis: false
         });
 
+        this.before('teardown', function() {
+            if (this.subscription) {
+                this.subscription();
+            }
+        })
+
         this.after('initialize', function() {
             this.$node.html(template({
                 noDataMessageDetailsText: this.attr.noDataMessageDetailsText
@@ -46,7 +54,6 @@ define([
             this.triggerChange = _.debounce(this.triggerChange.bind(this), 500);
             this.onGraphPaddingUpdated = _.debounce(this.onGraphPaddingUpdated.bind(this), 500);
             this.on(document, 'graphPaddingUpdated', this.onGraphPaddingUpdated);
-            this.on(document, 'workspaceUpdated', this.onWorkspaceUpdated);
             this.on(document, 'workspaceLoaded', this.onWorkspaceLoaded);
             this.on(document, 'objectsSelected', this.onObjectsSelected);
             this.on(document, 'verticesUpdated', this.onVerticesUpdated);
@@ -54,7 +61,8 @@ define([
             this.on('propertyConfigChanged', this.onPropertyConfigChanged);
             this.on('fitHistogram', this.onFitHistogram);
 
-            // FIXME: use different attr config to get all date properties
+            this.watchForProductChanges();
+
             if (!this.attr.property) {
                 this.attr.property = {
                     title: ALL_DATES,
@@ -67,6 +75,21 @@ define([
 
             this.renderChart();
         });
+
+        this.watchForProductChanges = function() {
+            visalloData.storePromise.then(store => {
+                var state = store.getState();
+                var previous = productSelectors.getProduct(state);
+                this.subscription = store.subscribe(() => {
+                    state = store.getState();
+                    var product = productSelectors.getProduct(state);
+                    if (product !== previous && product) {
+                        this.renderChart().then(() => this.updateBarSelection(this.currentSelected));
+                    }
+                    previous = product;
+                });
+            });
+        }
 
         this.onFitHistogram = function() {
             this.zoom.scale(1).translate([0, 0]).event(this.svg);
@@ -111,24 +134,6 @@ define([
             });
         };
 
-        this.onWorkspaceUpdated = function(event, data) {
-            if (data.newVertices.length) {
-                var self = this;
-                this.renderChart().then(function() {
-                    self.updateBarSelection(self.currentSelected);
-                });
-            }
-            if (data.entityDeletes.length) {
-                this.currentSelected.vertexIds = _.without(this.currentSelected.vertexIds || [], data.entityDeletes);
-                this.values = _.reject(this.values, function(v) {
-                    return _.contains(data.entityDeletes, v.vertexId);
-                });
-                this.data = this.binValues();
-                this.createBars(this.data);
-                this.updateBarSelection(this.currentSelected);
-            }
-        };
-
         this.onWorkspaceLoaded = function() {
             this.renderChart();
         };
@@ -164,7 +169,6 @@ define([
                         if (self.attr.includeYAxis) {
                             self.svg.select('.y.axis').call(self.yAxis)
                                                       .selectAll('.tick text')
-                                                      .attr('transform', 'translate(0,6)');
                         }
 
                         self.redraw(false, shouldSkipAnimation);
@@ -343,8 +347,11 @@ define([
 
                 yAxis = this.yAxis = d3.svg.axis()
                     .scale(yScale)
-                    .ticks(1)
+                    .ticks(0)
                     .tickSize(5, 0)
+                    .tickValues(function() {
+                        return yScale.domain()[1] !== 0 ? [0, yScale.domain()[1]] : [];
+                    })
                     .orient('right'),
 
                 onZoomedUpdate = _.throttle(function() {
@@ -374,14 +381,13 @@ define([
                     .on('brush', _.throttle(function() {
                         updateBrushInfo();
                         updateFocusInfo();
-                        brush.x(zoom.x());
                     }, 1000 / 30))))
                     //.call(function() {
                         //if (this.currentExtent) {
                             //brush = this.brush.extent(this.currentExtent);
                         //}
                     //})
-                    .x(zoom.x()),
+                    .x(self.xScale),
 
                 focus = null,
 
@@ -554,7 +560,7 @@ define([
                     .attr('y', height + BRUSH_PADDING - BRUSH_TEXT_PADDING);
 
             if (isDate) {
-                xAxis.tickFormat(d3.time.format.utc.multi([
+                xAxis.tickFormat(d3.time.format.multi([
                     ['.%L', function(d) {
                         return d.getMilliseconds();
                     }],
@@ -594,7 +600,6 @@ define([
                         this.enter().append('g')
                             .attr('class', 'y axis')
                             .selectAll('.tick text')
-                            .attr('transform', 'translate(0,6)');
                     })
                     .call(yAxis)
             }
@@ -662,10 +667,10 @@ define([
             function updateBrushInfo() {
                 var extent = self.brush.extent(),
                     delta = extent[1] - extent[0],
-                    width = Math.max(0, xScale(
+                    width = Math.max(0, self.xScale(
                              isDate ?
-                             new Date(xScale.domain()[0].getTime() + delta) :
-                             (xScale.domain()[0] + delta)
+                             new Date(self.xScale.domain()[0].getTime() + delta) :
+                             (self.xScale.domain()[0] + delta)
                         ) - 1),
                     data = {
                         extent: delta < 0.00001 ? null : extent
@@ -689,7 +694,7 @@ define([
 
                 gBrushText
                     .style('display', delta < 0.01 ? 'none' : '')
-                    .attr('transform', 'translate(' + xScale(extent[0]) + ', 0)');
+                    .attr('transform', 'translate(' + self.xScale(extent[0]) + ', 0)');
 
                 gBrushTextEnd
                     .text(brushedTextFormat(extent[1]))
@@ -713,8 +718,8 @@ define([
 
             function updateFocusInfo() {
                 if (mouse !== null) {
-                    var x0 = xScale.invert(mouse - margin.left);
-                    focus.attr('transform', 'translate(' + xScale(x0) + ', 0)');
+                    var x0 = self.xScale.invert(mouse - margin.left);
+                    focus.attr('transform', 'translate(' + self.xScale(x0) + ', 0)');
                     if (isDate) {
                         focus.select('text').text(format(x0));
                     } else {
@@ -723,7 +728,7 @@ define([
                 }
             }
 
-            this.redraw();
+            this.redraw(true);
         }
 
         this.createBars = function(data, skipAnimation) {

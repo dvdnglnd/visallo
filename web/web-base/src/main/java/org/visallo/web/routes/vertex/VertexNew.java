@@ -2,12 +2,10 @@ package org.visallo.web.routes.vertex;
 
 import com.google.inject.Inject;
 import com.v5analytics.webster.ParameterizedHandler;
-import com.v5analytics.webster.WebsterException;
 import com.v5analytics.webster.annotations.Handle;
 import com.v5analytics.webster.annotations.Optional;
 import com.v5analytics.webster.annotations.Required;
 import org.vertexium.*;
-import org.visallo.core.exception.VisalloAccessDeniedException;
 import org.visallo.core.model.graph.GraphRepository;
 import org.visallo.core.model.graph.VisibilityAndElementMutation;
 import org.visallo.core.model.ontology.OntologyProperty;
@@ -24,13 +22,12 @@ import org.visallo.core.util.ClientApiConverter;
 import org.visallo.core.util.VertexiumMetadataUtil;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
-import org.visallo.web.BadRequestException;
 import org.visallo.web.clientapi.model.ClientApiAddElementProperties;
 import org.visallo.web.clientapi.model.ClientApiElement;
 import org.visallo.web.clientapi.model.ClientApiSourceInfo;
-import org.visallo.web.clientapi.model.Privilege;
 import org.visallo.web.parameterProviders.ActiveWorkspaceId;
 import org.visallo.web.parameterProviders.JustificationText;
+import org.visallo.web.util.VisibilityValidator;
 
 import java.util.ResourceBundle;
 
@@ -45,15 +42,17 @@ public class VertexNew implements ParameterizedHandler {
     private final WorkQueueRepository workQueueRepository;
     private final OntologyRepository ontologyRepository;
     private final GraphRepository graphRepository;
+    private final WorkspaceHelper workspaceHelper;
 
     @Inject
     public VertexNew(
-            final Graph graph,
-            final VisibilityTranslator visibilityTranslator,
-            final WorkspaceRepository workspaceRepository,
-            final WorkQueueRepository workQueueRepository,
-            final OntologyRepository ontologyRepository,
-            final GraphRepository graphRepository
+            Graph graph,
+            VisibilityTranslator visibilityTranslator,
+            WorkspaceRepository workspaceRepository,
+            WorkQueueRepository workQueueRepository,
+            OntologyRepository ontologyRepository,
+            GraphRepository graphRepository,
+            WorkspaceHelper workspaceHelper
     ) {
         this.graph = graph;
         this.visibilityTranslator = visibilityTranslator;
@@ -61,6 +60,7 @@ public class VertexNew implements ParameterizedHandler {
         this.workQueueRepository = workQueueRepository;
         this.ontologyRepository = ontologyRepository;
         this.graphRepository = graphRepository;
+        this.workspaceHelper = workspaceHelper;
     }
 
     @Handle
@@ -77,12 +77,9 @@ public class VertexNew implements ParameterizedHandler {
             User user,
             Authorizations authorizations
     ) throws Exception {
-        if (!graph.isVisibilityValid(visibilityTranslator.toVisibility(visibilitySource).getVisibility(), authorizations)) {
-            LOGGER.warn("%s is not a valid visibility for %s user", visibilitySource, user.getDisplayName());
-            throw new BadRequestException("visibilitySource", resourceBundle.getString("visibility.invalid"));
-        }
+        VisibilityValidator.validate(graph, visibilityTranslator, resourceBundle, visibilitySource, user, authorizations);
 
-        workspaceId = WorkspaceHelper.getWorkspaceIdOrNullIfPublish(workspaceId, shouldPublish, user);
+        workspaceId = workspaceHelper.getWorkspaceIdOrNullIfPublish(workspaceId, shouldPublish, user);
 
         Vertex vertex = graphRepository.addVertex(
                 vertexId,
@@ -91,6 +88,7 @@ public class VertexNew implements ParameterizedHandler {
                 workspaceId,
                 justificationText,
                 sourceInfo,
+                user,
                 authorizations
         );
 
@@ -101,7 +99,10 @@ public class VertexNew implements ParameterizedHandler {
                 OntologyProperty ontologyProperty = ontologyRepository.getPropertyByIRI(property.propertyName);
                 checkNotNull(ontologyProperty, "Could not find ontology property '" + property.propertyName + "'");
                 Object value = ontologyProperty.convertString(property.value);
-                Metadata metadata = VertexiumMetadataUtil.metadataStringToMap(property.metadataString, this.visibilityTranslator.getDefaultVisibility());
+                Metadata metadata = VertexiumMetadataUtil.metadataStringToMap(
+                        property.metadataString,
+                        this.visibilityTranslator.getDefaultVisibility()
+                );
                 VisibilityAndElementMutation<Vertex> setPropertyResult = graphRepository.setProperty(
                         vertex,
                         property.propertyName,
@@ -135,7 +136,7 @@ public class VertexNew implements ParameterizedHandler {
 
         if (workspaceId != null) {
             Workspace workspace = workspaceRepository.findById(workspaceId, user);
-            workspaceRepository.updateEntityOnWorkspace(workspace, vertex.getId(), true, null, user);
+            workspaceRepository.updateEntityOnWorkspace(workspace, vertex.getId(), user);
             workQueueRepository.pushUserCurrentWorkspaceChange(user, workspaceId);
             this.graph.flush();
         }

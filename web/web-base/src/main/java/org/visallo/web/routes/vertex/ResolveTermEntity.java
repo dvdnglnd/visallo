@@ -21,13 +21,13 @@ import org.visallo.core.security.VisibilityTranslator;
 import org.visallo.core.user.User;
 import org.visallo.core.util.VisalloLogger;
 import org.visallo.core.util.VisalloLoggerFactory;
-import org.visallo.web.BadRequestException;
 import org.visallo.web.VisalloResponse;
 import org.visallo.web.clientapi.model.ClientApiSourceInfo;
 import org.visallo.web.clientapi.model.ClientApiSuccess;
 import org.visallo.web.clientapi.model.VisibilityJson;
 import org.visallo.web.parameterProviders.ActiveWorkspaceId;
 import org.visallo.web.parameterProviders.JustificationText;
+import org.visallo.web.util.VisibilityValidator;
 
 import java.util.Date;
 import java.util.ResourceBundle;
@@ -65,6 +65,7 @@ public class ResolveTermEntity implements ParameterizedHandler {
     public ClientApiSuccess handle(
             @Required(name = "artifactId") String artifactId,
             @Required(name = "propertyKey") String propertyKey,
+            @Required(name = "propertyName") String propertyName,
             @Required(name = "mentionStart") long mentionStart,
             @Required(name = "mentionEnd") long mentionEnd,
             @Required(name = "sign") String title,
@@ -85,11 +86,7 @@ public class ResolveTermEntity implements ParameterizedHandler {
         Workspace workspace = workspaceRepository.findById(workspaceId, user);
 
         VisibilityJson visibilityJson = VisibilityJson.updateVisibilitySourceAndAddWorkspaceId(null, visibilitySource, workspaceId);
-        VisalloVisibility visibility = this.visibilityTranslator.toVisibility(visibilityJson);
-        if (!graph.isVisibilityValid(visibility.getVisibility(), authorizations)) {
-            LOGGER.warn("%s is not a valid visibility for %s user", visibilitySource, user.getDisplayName());
-            throw new BadRequestException("visibilitySource", resourceBundle.getString("visibility.invalid"));
-        }
+        VisibilityValidator.validate(graph, visibilityTranslator, resourceBundle, visibilityJson, user, authorizations);
 
         String id = resolvedVertexId == null ? graph.getIdGenerator().nextId() : resolvedVertexId;
 
@@ -98,15 +95,17 @@ public class ResolveTermEntity implements ParameterizedHandler {
         final Vertex artifactVertex = graph.getVertex(artifactId, authorizations);
         VisalloVisibility visalloVisibility = visibilityTranslator.toVisibility(visibilityJson);
         Metadata metadata = new Metadata();
-        VisalloProperties.VISIBILITY_JSON_METADATA.setMetadata(metadata, visibilityJson, visibilityTranslator.getDefaultVisibility());
-        ElementMutation<Vertex> vertexMutation;
+        Visibility defaultVisibility = visibilityTranslator.getDefaultVisibility();
+        VisalloProperties.VISIBILITY_JSON_METADATA.setMetadata(metadata, visibilityJson, defaultVisibility);
         Vertex vertex;
         if (resolvedVertexId != null) {
             vertex = graph.getVertex(id, authorizations);
-            vertexMutation = vertex.prepareMutation();
         } else {
-            vertexMutation = graph.prepareVertex(id, visalloVisibility.getVisibility());
-            VisalloProperties.CONCEPT_TYPE.setProperty(vertexMutation, conceptId, metadata, visalloVisibility.getVisibility());
+            ElementMutation<Vertex> vertexMutation = graph.prepareVertex(id, visalloVisibility.getVisibility());
+            VisalloProperties.CONCEPT_TYPE.setProperty(vertexMutation, conceptId, defaultVisibility);
+            VisalloProperties.VISIBILITY_JSON.setProperty(vertexMutation, visibilityJson, defaultVisibility);
+            VisalloProperties.MODIFIED_BY.setProperty(vertexMutation, user.getUserId(), defaultVisibility);
+            VisalloProperties.MODIFIED_DATE.setProperty(vertexMutation, new Date(), defaultVisibility);
             VisalloProperties.TITLE.addPropertyValue(vertexMutation, MULTI_VALUE_KEY, title, metadata, visalloVisibility.getVisibility());
 
             if (justificationText != null) {
@@ -114,24 +113,24 @@ public class ResolveTermEntity implements ParameterizedHandler {
                 VisalloProperties.JUSTIFICATION.setProperty(vertexMutation, propertyJustificationMetadata, visalloVisibility.getVisibility());
             }
 
-            VisalloProperties.VISIBILITY_JSON.setProperty(vertexMutation, visibilityJson, metadata, visalloVisibility.getVisibility());
             vertex = vertexMutation.save(authorizations);
 
             this.graph.flush();
 
-            workspaceRepository.updateEntityOnWorkspace(workspace, vertex.getId(), null, null, user);
+            workspaceRepository.updateEntityOnWorkspace(workspace, vertex.getId(), user);
         }
 
         EdgeBuilder edgeBuilder = graph.prepareEdge(artifactVertex, vertex, this.artifactHasEntityIri, visalloVisibility.getVisibility());
-        VisalloProperties.MODIFIED_BY.setProperty(edgeBuilder, user.getUserId(), visalloVisibility.getVisibility());
-        VisalloProperties.MODIFIED_DATE.setProperty(edgeBuilder, new Date(), visalloVisibility.getVisibility());
-        VisalloProperties.VISIBILITY_JSON.setProperty(edgeBuilder, visibilityJson, metadata, visalloVisibility.getVisibility());
+        VisalloProperties.MODIFIED_BY.setProperty(edgeBuilder, user.getUserId(), defaultVisibility);
+        VisalloProperties.MODIFIED_DATE.setProperty(edgeBuilder, new Date(), defaultVisibility);
+        VisalloProperties.VISIBILITY_JSON.setProperty(edgeBuilder, visibilityJson, defaultVisibility);
         Edge edge = edgeBuilder.save(authorizations);
 
         ClientApiSourceInfo sourceInfo = ClientApiSourceInfo.fromString(sourceInfoString);
         new TermMentionBuilder()
                 .outVertex(artifactVertex)
                 .propertyKey(propertyKey)
+                .propertyName(propertyName)
                 .start(mentionStart)
                 .end(mentionEnd)
                 .title(title)
@@ -141,8 +140,6 @@ public class ResolveTermEntity implements ParameterizedHandler {
                 .resolvedTo(vertex, edge)
                 .process(getClass().getSimpleName())
                 .save(this.graph, visibilityTranslator, user, authorizations);
-
-        vertexMutation.save(authorizations);
 
         this.graph.flush();
         workQueueRepository.pushTextUpdated(artifactId);

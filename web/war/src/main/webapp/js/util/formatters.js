@@ -159,11 +159,14 @@ define([
                 ][Math.round(inRange / 45) % 8]) + ' ' + FORMATTERS.number.pretty(inRange) + '°';
             },
             duration: function(value) {
-                if (!$.trim(value).length) {
+                if (!_.isNumber(value) && !$.trim(value).length) {
                     return '';
                 } else if (value === 0) {
                     return '0s';
                 } else {
+                    if (_.isNumber(value)) {
+                        value = Math.floor(value);
+                    }
                     return new Duration(value + 's').toString().replace(/(ms|[wdhms])/g, '$1 ').trim()
                 }
             }
@@ -224,6 +227,28 @@ define([
                 }
                 fromClassNameMap[className] = string;
                 return className;
+            }
+        },
+        directoryEntity: {
+            pretty: function(directoryEntity) {
+                if (directoryEntity && directoryEntity.type) {
+                    var prettyType = directoryEntity.type === 'group' ? i18n('field.directory.group') : i18n('field.directory.person');
+                    return directoryEntity.displayName + ' (' + prettyType + ')';
+                } else {
+                    return '';
+                }
+            },
+            requestPretty: function(id) {
+                if (!id) {
+                    return Promise.resolve(null);
+                }
+                return Promise.require('util/withDataRequest')
+                      .then(function(dr) {
+                          return dr.dataRequest('directory', 'getById', id)
+                      })
+                      .then(function(value) {
+                          return FORMATTERS.directoryEntity.pretty(value);
+                      });
             }
         },
         geoLocation: {
@@ -467,8 +492,11 @@ define([
             },
             utc: function(str) {
                 if (_.isUndefined(str)) return '';
-                var dateInLocale = FORMATTERS.date.local(str),
-                    millisInMinutes = 1000 * 60,
+
+                var dateInLocale = FORMATTERS.date.local(str);
+                if (!dateInLocale) return '';
+
+                var millisInMinutes = 1000 * 60,
                     millisFromLocaleToUTC = dateInLocale.getTimezoneOffset() * millisInMinutes,
                     dateInUTC = new Date(dateInLocale.getTime() + millisFromLocaleToUTC);
                 return dateInUTC;
@@ -618,8 +646,11 @@ define([
                     withOffsetForDate = Date.now();
                 }
 
-                var momentZone = moment.tz.zone(name),
-                    offset = momentZone.offset(withOffsetForDate) * -1,
+                var momentZone = moment.tz.zone(name);
+                if (!momentZone) {
+                    throw new Error('Could not find timezone "' + name + '"');
+                }
+                var offset = momentZone.offset(withOffsetForDate) * -1,
                     tzInfo = {
                         tzOffset: offset,
                         tzAbbr: momentZone.abbr(withOffsetForDate),
@@ -629,9 +660,9 @@ define([
                 return $.extend({}, tz, tzInfo);
             },
 
-            currentTimezone: function() {
+            currentTimezone: _.once(function() {
                 return FORMATTERS.timezone.lookupTimezone(jstz.determine().name());
-            }
+            })
         }
     };
 

@@ -10,7 +10,7 @@ console = {
     warn: consoleWarn,
     error: consoleError
 };
-
+window.addEventListener = function() { };
 require.config({
     baseUrl: '',
     paths: {
@@ -23,7 +23,6 @@ require.config({
         'duration-js': 'libs/duration',
         'moment': 'libs/moment-with-locales',
         'moment-timezone': 'libs/moment-timezone-with-data',
-        'duration-js': 'libs/duration-js',
 
         // MOCKS
         'jquery': 'mocks/jquery',
@@ -32,6 +31,7 @@ require.config({
         'util/ajax': 'mocks/ajax',
         'util/memoize': 'mocks/memoize',
         'configuration/plugins/registry': 'mocks/registry',
+        'store': 'mocks/store',
 
         // SRC
         'util/formatters': 'util_formatters',
@@ -42,13 +42,17 @@ require.config({
         'util/service/ontologyPromise': 'util_service_ontologyPromise',
         'util/vertex/formatters': 'util_vertex_formatters',
         'util/vertex/formula': 'util_vertex_formula',
-        'util/vertex/urlFormatters': 'util_vertex_urlFormatters'
+        'util/vertex/urlFormatters': 'util_vertex_urlFormatters',
+        'service/config': 'service/config',
+        'service/ontology': 'service/ontology'
     },
     shims: {
         'bluebird': { exports: 'Promise' },
         'util/vertex/formatters': { deps: ['util/promise'] }
     }
 });
+
+define('util/visibility/util', [], {});
 
 var timerLoop = makeWindowTimer(this, function () { });
 
@@ -63,7 +67,7 @@ require(['util/vertex/formatters'], function(F) {
     window.evaluateTimeFormulaJson = createFunction('time');
     window.evaluateSubtitleFormulaJson = createFunction('subtitle');
     window.evaluatePropertyFormulaJson = function(json, propertyKey, propertyName) {
-        return F.vertex['prop'](JSON.parse(json), propertyName);
+        return F.vertex['prop'](JSON.parse(json), propertyName, propertyKey);
     }
 });
 

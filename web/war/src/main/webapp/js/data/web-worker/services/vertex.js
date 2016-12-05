@@ -1,4 +1,3 @@
-
 define([
     '../util/ajax',
     './storeHelper'
@@ -19,7 +18,8 @@ define([
             if (options.conceptFilter && matchType === 'vertex') {
                 params.conceptType = options.conceptFilter;
             }
-            if (options.edgeLabelFilter && matchType === 'edge') {
+            if (options.edgeLabelFilter
+                && (matchType === 'edge' || (options.otherFilters && options.otherFilters.relatedToVertexIds))) {
                 params.edgeLabel = options.edgeLabelFilter;
             }
             if (options.paging) {
@@ -61,6 +61,9 @@ define([
                 .then(function(query) {
                     return ajax('POST', query.url, query.parameters);
                 })
+                .tap(function({ elements }) {
+                    storeHelper.putSearchResults(elements)
+                })
         },
 
         'geo-search': function(lat, lon, radius) {
@@ -75,9 +78,29 @@ define([
             return ajax('GET', '/vertex/find-path', options);
         },
 
-        multiple: function(options) {
-            return ajax('POST', '/vertex/multiple', options);
+        history: function(vertexId) {
+            return ajax('GET', '/vertex/history', {
+                graphVertexId: vertexId
+            });
         },
+
+        propertyHistory: function(vertexId, property, options) {
+            return ajax('GET', '/vertex/property/history', _.extend(
+                {},
+                options || {},
+                {
+                    graphVertexId: vertexId,
+                    propertyName: property.name,
+                    propertyKey: property.key
+                }
+            ));
+        },
+
+        details: function(vertexId) {
+            return ajax('GET', '/vertex/details', { vertexId: vertexId });
+        },
+
+        multiple: storeHelper.createStoreAccessorOrDownloader('vertex'),
 
         properties: function(vertexId) {
             return ajax('GET', '/vertex/properties', {
@@ -90,7 +113,15 @@ define([
                 vertexId: vertexId,
                 propertyName: name,
                 propertyKey: key,
-                visibilitySource: visibility
+                visibilitySource: visibility || ''
+            });
+        },
+
+        propertyValue: function(vertexId, name, key) {
+            return ajax('GET->HTML', '/vertex/property', {
+                graphVertexId: vertexId,
+                propertyName: name,
+                propertyKey: key
             });
         },
 
@@ -102,6 +133,7 @@ define([
                 if (options.offset) parameters.offset = options.offset;
                 if (options.size) parameters.size = options.size;
                 if (options.edgeLabel) parameters.edgeLabel = options.edgeLabel;
+                if (options.direction) parameters.direction = options.direction;
             }
 
             return ajax('GET', '/vertex/edges', parameters);
@@ -120,17 +152,19 @@ define([
         },
 
         deleteProperty: function(vertexId, property) {
-            return ajax('DELETE', '/vertex/property', {
+            var url = storeHelper.vertexPropertyUrl(property);
+            return ajax('DELETE', url, {
                 graphVertexId: vertexId,
                 propertyName: property.name,
                 propertyKey: property.key
             })
         },
 
-        'highlighted-text': function(vertexId, propertyKey) {
+        'highlighted-text': function(vertexId, propertyKey, propertyName) {
             return ajax('GET->HTML', '/vertex/highlighted-text', {
                 graphVertexId: vertexId,
-                propertyKey: propertyKey
+                propertyKey: propertyKey,
+                propertyName: propertyName
             });
         },
 
@@ -142,14 +176,9 @@ define([
             });
         },
 
-        store: storeHelper.createStoreAccessorOrDownloader(
-            'vertex', 'vertexIds', 'vertices',
-            function(toRequest) {
-                return api.multiple({
-                    vertexIds: toRequest
-                });
-            }
-        ),
+        store: function(options) {
+            return api.multiple(options);
+        },
 
         uploadImage: function(vertexId, file) {
             return ajax('POST', '/vertex/upload-image?' +
@@ -166,7 +195,7 @@ define([
                 } else if (justification.sourceInfo) {
                     data.sourceInfo = JSON.stringify(justification.sourceInfo);
                 }
-            }));
+            })).tap(storeHelper.updateElement);
         },
 
         importFiles: function(files, conceptValue, visibilitySource) {
@@ -211,15 +240,21 @@ define([
             return ajax('POST', '/vertex/visibility', {
                 graphVertexId: vertexId,
                 visibilitySource: visibilitySource
-            });
+            }).tap(storeHelper.updateElement);
+        },
+
+        setPropertyVisibility: function(vertexId, property) {
+            return ajax('POST', '/vertex/property/visibility', {
+                graphVertexId: vertexId,
+                newVisibilitySource: property.visibilitySource,
+                oldVisibilitySource: property.oldVisibilitySource,
+                propertyKey: property.key,
+                propertyName: property.name
+            })
         },
 
         setProperty: function(vertexId, property, optionalWorkspaceId) {
-            var url = '/vertex/' + (
-                property.name === 'http://visallo.org/comment#entry' ?
-                'comment' : 'property'
-            );
-
+            var url = storeHelper.vertexPropertyUrl(property);
             return ajax('POST', url, _.tap({
                  graphVertexId: vertexId,
                  propertyName: property.name,
@@ -240,7 +275,7 @@ define([
                 if (optionalWorkspaceId) {
                     params.workspaceId = optionalWorkspaceId;
                 }
-            }));
+            })).tap(storeHelper.updateElement);
         },
 
         resolveTerm: function(params) {
@@ -257,10 +292,6 @@ define([
 
         unresolveDetectedObject: function(params) {
             return ajax('POST', '/vertex/unresolve-detected-object', params);
-        },
-
-        acl: function(vertexId) {
-            return ajax('GET', '/vertex/acl', { elementId: vertexId });
         }
     };
 

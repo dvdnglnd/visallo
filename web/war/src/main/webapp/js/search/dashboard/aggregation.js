@@ -1,10 +1,12 @@
 define([
     'flight/lib/component',
+    'd3',
     'util/withDataRequest',
     'util/requirejs/promise!util/service/ontologyPromise',
     'hbs!./aggregationTpl'
 ], function(
     defineComponent,
+    d3,
     withDataRequest,
     ontology,
     template) {
@@ -12,17 +14,27 @@ define([
 
     var AGGREGATIONS = [
             { value: 'term', name: 'Counts' },
-            { value: 'histogram', name: 'Histogram' },
-            { value: 'geohash', name: 'Geo-coordinate Cluster' },
-            { value: 'statistics', name: 'Statistics' }
+            { value: 'histogram', name: 'Histogram', filter: function(properties) {
+                return _.filter(properties, function(p) {
+                    return p.dataType.toLowerCase() !== 'string';
+                });
+            }},
+            { value: 'geohash', name: 'Geo-coordinate Cluster', filter: function(properties) {
+                return _.filter(properties, function(p) {
+                    return p.dataType.toLowerCase() === 'geolocation';
+                });
+            }}
         ],
+        AGGREGATIONS_NO_GEOHASH = _.reject(AGGREGATIONS, function(a) {
+            return a.value === 'geohash';
+        }),
         INTERVAL_UNITS = [
             { value: 1000 * 60, label: 'minutes' },
             { value: 1000 * 60 * 60, label: 'hours' },
             { value: 1000 * 60 * 60 * 24, label: 'days' },
             { value: 1000 * 60 * 60 * 24 * 365, label: 'years' }
         ],
-        HISTOGRAM_CALCULATED_BUCKETS = 50,
+        HISTOGRAM_CALCULATED_BUCKETS = 20,
         PRECISIONS = [
             { value: 1, label: '5000 x 5000 km (large)' },
             { value: 2, label: '1000 x 500 km' },
@@ -59,16 +71,6 @@ define([
         this.after('initialize', function() {
             var self = this;
 
-            this.aggregations = (this.attr.aggregations || []).map(function addId(a) {
-                if (!a.id) a.id = idIncrement++;
-                if (_.isArray(a.nested)) {
-                    a.nested = a.nested.map(addId);
-                }
-                return a;
-            });
-            this.currentAggregation = null;
-            this.updateAggregations(null, true);
-
             this.on('change', {
                 aggregationSelector: this.onChangeAggregation,
                 inputsSelector: this.onChangeInputs,
@@ -85,12 +87,26 @@ define([
             })
 
             this.on('propertyselected', this.onPropertySelected);
+            this.on('filterProperties', this.onFilterProperties);
 
-            this.$node.html(template({
-                aggregations: AGGREGATIONS,
-                precisions: PRECISIONS,
-                intervalUnits: INTERVAL_UNITS
-            }));
+            this.mapzenSupported()
+                .then(function(mapzen) {
+                    self.aggregations = (self.attr.aggregations || []).map(function addId(a) {
+                        if (!a.id) a.id = idIncrement++;
+                        if (_.isArray(a.nested)) {
+                            a.nested = a.nested.map(addId);
+                        }
+                        return a;
+                    });
+                    self.currentAggregation = null;
+                    self.updateAggregations(null, true);
+
+                    self.$node.html(template({
+                        aggregations: mapzen ? AGGREGATIONS : AGGREGATIONS_NO_GEOHASH,
+                        precisions: PRECISIONS,
+                        intervalUnits: INTERVAL_UNITS
+                    }));
+            });
         });
 
         this.onChangeInputs = function(event, data) {
@@ -202,25 +218,13 @@ define([
                             buckets = range / HISTOGRAM_CALCULATED_BUCKETS,
                             ontologyProperty = ontology.properties.byTitle[stats.field],
                             isDate = ontologyProperty && ontologyProperty.dataType === 'date',
-                            interval = defaultInterval;
+                            interval = Math.round(buckets);
 
                         if (isDate) {
-                            var unitIndex = 0, value;
-                            for (var i = 0; i < INTERVAL_UNITS.length; i++) {
-                                if (buckets < INTERVAL_UNITS[i].value) {
-                                    unitIndex = Math.max(i - 1);
-                                    value = buckets / INTERVAL_UNITS[unitIndex].value;
-                                    break;
-                                }
-                            }
-                            if (value > 2) {
-                                value = Math.round(value);
-                            }
-                            interval = INTERVAL_UNITS[unitIndex].value * value;
-                            $intervalUnits.val(INTERVAL_UNITS[unitIndex].value);
-                            $intervalValue.val(value);
-                        } else {
-                            interval = Math.round(buckets);
+                            var minuteInterval = INTERVAL_UNITS[0].value;
+                            self.currentAggregation.isDate = true;
+                            interval = interval < minuteInterval ? minuteInterval : interval;
+                            $intervalUnits.val(minuteInterval);
                         }
                         $interval.val(interval);
                         $interval.toggle(!isDate);
@@ -351,7 +355,8 @@ define([
         this.updateAggregationDependents = function(type) {
             var section = this.$node.find('.' + type).show(),
                 others = section.siblings('div').hide(),
-                aggregation = this.currentAggregation;
+                aggregation = this.currentAggregation,
+                placeholder;
 
             this.currentAggregation.type = type;
 
@@ -360,7 +365,9 @@ define([
                     if (!aggregation.precision) {
                         aggregation.precision = '5';
                     }
+
                     section.find('.precision').val(aggregation.precision);
+                    placeholder = i18n('dashboard.search.aggregation.geohash.property.placeholder');
                     break;
 
                 case 'histogram':
@@ -369,8 +376,7 @@ define([
                     }
 
                     var ontologyProperty = ontology.properties.byTitle[this.currentAggregation.field],
-                        isDate = ontologyProperty && ontologyProperty.dataType === 'date',
-
+                        isDate = !!ontologyProperty && ontologyProperty.dataType === 'date',
                         $interval = section.find('.interval').toggle(!isDate);
 
                     section.find('.date_interval').toggle(isDate);
@@ -392,13 +398,9 @@ define([
                         section.find('.interval_value').val(Math.round(interval / intervalUnit.value));
                         section.find('.interval_units').val(intervalUnit.value);
                     }
-
                     break;
 
                 case 'term':
-                    break;
-
-                case 'statistics':
                     break;
 
                 default:
@@ -408,30 +410,77 @@ define([
             this.select('aggregationSelector').val(type);
             this.attachPropertySelection(section.find('.property-select'), {
                 selected: aggregation && aggregation.field,
-                placeholder: 'Property to Count'
-            })
+                placeholder: placeholder || i18n('dashboard.savedsearches.aggregation.property.placeholder')
+            });
+        };
+
+        this.onFilterProperties = function(event, data) {
+            if ($(event.target).is('.property-select')) return;
+
+            if (!data || _.isEmpty(data.properties)) {
+                this.filteredProperties = null;
+            } else {
+                this.filteredProperties = data.properties;
+            }
+
+            this.$node.find('.property-select').trigger(event.type, {
+                properties: this.filteredProperties
+            });
         };
 
         this.attachPropertySelection = function(node, options) {
+            var self = this;
             if (!options) {
                 options = {};
             }
             return Promise.all([
                 this.dataRequest('ontology', 'properties'),
-                Promise.require('fields/selection/selection')
-            ]).done(function(results) {
-                var properties = results.shift(),
-                    FieldSelection = results.shift();
+                Promise.require('util/ontology/propertySelect')
+            ]).spread(function(properties, FieldSelection) {
+                var propertiesToFilter = self.filteredProperties || properties.list;
 
                 node.teardownComponent(FieldSelection);
+
                 FieldSelection.attachTo(node, {
                     selectedProperty: options.selected && properties.byTitle[options.selected] || null,
-                    properties: properties.list,
+                    properties: self.filterProperties(propertiesToFilter),
                     showAdminProperties: true,
                     placeholder: options.placeholder || ''
                 });
             });
         };
 
+        this.filterProperties = function(properties) {
+            var self = this;
+            var aggregation = _.find(AGGREGATIONS, function(a) {
+                return a.value === self.currentAggregation.type;
+            });
+            var filteredProperties = _.reject(properties, function(p) {
+                var isUserVisible = p.title === 'http://visallo.org#conceptType' || p.userVisible,
+                    isPropString = p.dataType === 'string';
+                if (isPropString) {
+                    var isSearchable = p.textIndexHints !== undefined ? p.textIndexHints.length > 0 : false;
+                    return !isSearchable || !isUserVisible;
+                }
+                return !isUserVisible;
+            });
+
+            return _.isFunction(aggregation.filter) ? aggregation.filter(filteredProperties) : filteredProperties;
+        };
+
+        this.mapzenSupported = _.memoize(function() {
+            var self = this;
+            return new Promise(function(f) {
+                self.dataRequest('config', 'properties').then(function(config) {
+                    if (config['mapzen.enabled'] === 'false') {
+                        f(false);
+                    } else {
+                        d3.json('mapzen/osm/all/0/0/0.json', function(error, json) {
+                            f(!error);
+                        });
+                    }
+                });
+            });
+        });
     }
 });

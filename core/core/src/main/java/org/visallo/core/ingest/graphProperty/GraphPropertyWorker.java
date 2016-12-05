@@ -11,7 +11,7 @@ import org.visallo.core.model.ontology.OntologyRepository;
 import org.visallo.core.model.properties.MediaVisalloProperties;
 import org.visallo.core.model.properties.VisalloProperties;
 import org.visallo.core.model.properties.types.VisalloPropertyUpdate;
-import org.visallo.core.model.user.AuthorizationRepository;
+import org.visallo.core.model.user.GraphAuthorizationRepository;
 import org.visallo.core.model.workQueue.Priority;
 import org.visallo.core.model.workQueue.WorkQueueRepository;
 import org.visallo.core.model.workspace.WorkspaceRepository;
@@ -31,7 +31,7 @@ public abstract class GraphPropertyWorker {
     private VisibilityTranslator visibilityTranslator;
     private WorkQueueRepository workQueueRepository;
     private OntologyRepository ontologyRepository;
-    private AuthorizationRepository authorizationRepository;
+    private GraphAuthorizationRepository graphAuthorizationRepository;
     private GraphPropertyWorkerPrepareData workerPrepareData;
     private Configuration configuration;
     private WorkspaceRepository workspaceRepository;
@@ -67,15 +67,15 @@ public abstract class GraphPropertyWorker {
 
     public boolean isDeleteHandled(Element element, Property property) {
         return false;
-    };
+    }
 
     public boolean isHiddenHandled(Element element, Property property) {
         return false;
-    };
+    }
 
     public boolean isUnhiddenHandled(Element element, Property property) {
         return false;
-    };
+    }
 
     public abstract void execute(InputStream in, GraphPropertyWorkData data) throws Exception;
 
@@ -146,12 +146,12 @@ public abstract class GraphPropertyWorker {
     }
 
     @Inject
-    public final void setAuthorizationRepository(AuthorizationRepository authorizationRepository) {
-        this.authorizationRepository = authorizationRepository;
+    public final void setGraphAuthorizationRepository(GraphAuthorizationRepository graphAuthorizationRepository) {
+        this.graphAuthorizationRepository = graphAuthorizationRepository;
     }
 
-    protected AuthorizationRepository getAuthorizationRepository() {
-        return authorizationRepository;
+    protected GraphAuthorizationRepository getGraphAuthorizationRepository() {
+        return graphAuthorizationRepository;
     }
 
     public GraphRepository getGraphRepository() {
@@ -226,7 +226,7 @@ public abstract class GraphPropertyWorker {
             return;
         }
         graph.flush();
-        getWorkspaceRepository().updateEntityOnWorkspace(data.getWorkspaceId(), vertex.getId(), false, null, getUser());
+        getWorkspaceRepository().updateEntityOnWorkspace(data.getWorkspaceId(), vertex.getId(), getUser());
     }
 
     protected void pushChangedPropertiesOnWorkQueue(GraphPropertyWorkData data, List<VisalloPropertyUpdate> changedProperties) {

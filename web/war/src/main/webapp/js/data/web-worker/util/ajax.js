@@ -1,9 +1,17 @@
 
 /*global File:false*/
-define(['util/promise'], function() {
+define(['util/promise'], function(Promise) {
     'use strict';
 
+    RequestFailed.prototype = Object.create(Error.prototype);
+
     return ajax;
+
+    function RequestFailed({json, status = '', statusText = ''}) {
+        this.json = json;
+        this.status = status;
+        this.statusText = statusText;
+    }
 
     function paramPair(key, value) {
         return key + '=' + encodeURIComponent(value);
@@ -40,7 +48,7 @@ define(['util/promise'], function() {
 
                 // TODO: support fixing nested arrays
                 if (_.isArray(params[key])) {
-                    str += _.map(params[key], _.partial(paramPair, key + '[]')).join('&') + '&';
+                    str += _.map(params[key], _.partial(paramPair, !(/\[\]$/).test(key) ? key + '[]' : key)).join('&') + '&';
                 } else if (_.isObject(params[key])) {
                     str += paramPair(key, JSON.stringify(params[key])) + '&';
                 } else {
@@ -64,22 +72,25 @@ define(['util/promise'], function() {
 
         var finished = false,
             r = new XMLHttpRequest(),
-            promise = new Promise(function(fulfill, reject) {
+            promise = new Promise(function(fulfill, reject, onCancel) {
                 var progressHandler,
                     params = isFile(parameters) ? toFileUpload(parameters) : toQueryString(parameters),
                     resolvedUrl = BASE_URL + url + ((/GET|DELETE/.test(method) && parameters) ?
                         ('?' + params) : ''),
                     formData;
 
+                onCancel(function() {
+                    r.abort();
+                });
+
                 r.onload = function() {
                     finished = true;
-                    if (promise && promise._aborted) return;
-                    if (r.upload) {
+                    try {
                         r.upload.removeEventListener('progress', progressHandler);
-                    }
-                    var text = r.status === 200 && r.responseText;
+                    } catch(e) {}
 
-                    if (text) {
+                    if (r.status === 200) {
+                        var text = r.responseText;
                         if (isJson) {
                             try {
                                 var json = JSON.parse(text);
@@ -92,7 +103,7 @@ define(['util/promise'], function() {
                                 }
                                 fulfill(json);
                             } catch(e) {
-                                reject(e && e.message);
+                                reject(e);
                             }
                         } else {
                             fulfill(text)
@@ -101,27 +112,25 @@ define(['util/promise'], function() {
                         if (r.responseText && (/^\s*{/).test(r.responseText)) {
                             try {
                                 var errorJson = JSON.parse(r.responseText);
-                                reject(errorJson);
+                                reject(new RequestFailed({ json: errorJson }));
                                 return;
                             } catch(e) { /*eslint no-empty:0 */ }
                         }
-                        reject({
-                            status: r.status,
-                            statusText: r.statusText
-                        });
+                        const { status, statusText } = r;
+                        reject(new RequestFailed({ status, statusText }))
                     }
                 };
                 r.onerror = function() {
                     finished = true;
-                    if (promise && promise._aborted) return;
-                    if (r.upload) {
+                    try {
                         r.upload.removeEventListener('progress', progressHandler);
-                    }
+                    } catch(e) {}
                     reject(new Error('Network Error'));
                 };
                 r.open(method, resolvedUrl, true);
 
-                if (r.upload) {
+                // using try/catch here because I could not get feature detection to work in IE11
+                try {
                     r.upload.addEventListener('progress', (progressHandler = function(event) {
                         if (event.lengthComputable) {
                             var complete = (event.loaded / event.total || 0);
@@ -130,7 +139,7 @@ define(['util/promise'], function() {
                             }
                         }
                     }), false);
-                }
+                } catch(e) {}
 
                 if (method === 'POST' && parameters) {
                     formData = params;
@@ -161,13 +170,6 @@ define(['util/promise'], function() {
 
                 r.send(formData);
             });
-
-        promise.abort = function() {
-            this._aborted = true;
-            if (r && !finished) {
-                r.abort();
-            }
-        }
 
         return promise;
     }

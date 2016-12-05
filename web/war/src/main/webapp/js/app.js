@@ -8,13 +8,16 @@ define([
     'workspaces/workspaces',
     'workspaces/overlay',
     'workspaces/timeline',
+    'product/ProductListContainer',
     'admin/admin',
     'activity/activity',
-    'graph/graph',
     'detail/detail',
-    'map/map',
     'help/help',
+    'react',
+    'react-dom',
+    'react-redux',
     'configuration/plugins/registry',
+    'util/component/attacher',
     'util/mouseOverlay',
     'util/withFileDrop',
     'util/vertex/menu',
@@ -30,13 +33,16 @@ define([
     Workspaces,
     WorkspaceOverlay,
     WorkspaceTimeline,
+    ProductListContainer,
     Admin,
     Activity,
-    Graph,
     Detail,
-    Map,
     Help,
+    React,
+    ReactDom,
+    redux,
     registry,
+    attacher,
     MouseOverlay,
     withFileDrop,
     VertexMenu,
@@ -66,14 +72,13 @@ define([
             dashboardSelector: '.dashboard-pane',
             searchSelector: '.search-pane',
             workspacesSelector: '.workspaces-pane',
+            productSelector: '.products-pane',
             workspaceOverlaySelector: '.workspace-overlay',
             extensionPanesSelector: '.plugin-pane',
             extensionSubPanesSelector: '.plugin-subpane',
             adminSelector: '.admin-pane',
             helpDialogSelector: '.help-dialog',
             activitySelector: '.activity-pane',
-            graphSelector: '.graph-pane',
-            mapSelector: '.map-pane',
             detailPaneSelector: '.detail-pane'
         });
 
@@ -87,8 +92,6 @@ define([
                 Search,
                 Workspaces,
                 Admin,
-                Graph,
-                Map,
                 Detail,
                 Help
             ], 'teardownAll');
@@ -112,7 +115,8 @@ define([
                 'Override logout',
                 function(e) {
                     return _.isFunction(e);
-                }
+                },
+                'http://docs.visallo.org/extension-points/front-end/logout'
             );
             registry.documentExtensionPoint('org.visallo.vertex.menu',
                 'Add vertex context menu items',
@@ -120,17 +124,11 @@ define([
                     return e === 'DIVIDER' || (
                         ('event' in e || 'submenu' in e) && ('label' in e)
                     );
-                }
-            );
-            registry.documentExtensionPoint('org.visallo.detail.toolbar',
-                'Add detail pane toolbar items',
-                function(e) {
-                    return e === 'DIVIDER' || (
-                        ('event' in e) && ('title' in e)
-                        );
-                }
+                },
+                'http://docs.visallo.org/extension-points/front-end/vertexMenu'
             );
 
+            fixMultipleBootstrapModals();
             document.addEventListener('mousewheel', preventPinchToZoom, true);
             this.on('registerForPositionChanges', this.onRegisterForPositionChanges);
 
@@ -153,6 +151,7 @@ define([
             this.on(document, 'genericPaste', this.onGenericPaste);
             this.on(document, 'toggleTimeline', this.onToggleTimeline);
             this.on(document, 'privilegesReady', _.once(this.onPrivilegesReady.bind(this)));
+            this.on(document, 'openFullscreen', this.onOpenFullscreen);
 
             this.trigger(document, 'registerKeyboardShortcuts', {
                 scope: ['graph.help.scope', 'map.help.scope'].map(i18n),
@@ -191,11 +190,10 @@ define([
                 dashboardPane = content.filter('.dashboard-pane').data(DATA_MENUBAR_NAME, 'dashboard'),
                 searchPane = content.filter('.search-pane').data(DATA_MENUBAR_NAME, 'search'),
                 workspacesPane = content.filter('.workspaces-pane').data(DATA_MENUBAR_NAME, 'workspaces'),
+                productsPane = content.filter('.products-pane').data(DATA_MENUBAR_NAME, 'products'),
                 adminPane = content.filter('.admin-pane').data(DATA_MENUBAR_NAME, 'admin'),
                 activityPane = content.filter('.activity-pane').data(DATA_MENUBAR_NAME, 'activity'),
-                graphPane = content.filter('.graph-pane').data(DATA_MENUBAR_NAME, 'graph'),
                 detailPane = content.filter('.detail-pane').data(DATA_MENUBAR_NAME, 'detail'),
-                mapPane = content.filter('.map-pane').data(DATA_MENUBAR_NAME, 'map'),
                 helpDialog = content.filter('.help-dialog');
 
             this.on('resizecreate', this.onResizeCreateLoad);
@@ -205,6 +203,7 @@ define([
             // Configure splitpane resizing
             resizable(searchPane, 'e', 190, 300, this.onPaneResize.bind(this), this.onResizeCreateLoad.bind(this));
             resizable(workspacesPane, 'e', 190, 250, this.onPaneResize.bind(this), this.onResizeCreateLoad.bind(this));
+            resizable(productsPane, 'e', 150, 250, this.onPaneResize.bind(this), this.onResizeCreateLoad.bind(this));
             resizable(adminPane, 'e', 190, 250, this.onPaneResize.bind(this), this.onResizeCreateLoad.bind(this));
             resizable(detailPane, 'w', 225, 500, this.onPaneResize.bind(this), this.onResizeCreateLoad.bind(this));
 
@@ -217,26 +216,33 @@ define([
             Workspaces.attachTo(workspacesPane.find('.content'));
             Admin.attachTo(adminPane.find('.content'));
             Activity.attachTo(activityPane.find('.content'));
-            Graph.attachTo(graphPane.filter('.graph-pane-2d'));
-            Map.attachTo(mapPane);
             Detail.attachTo(detailPane.find('.content'));
             Help.attachTo(helpDialog);
+
+            this.attachReactComponentWithStore(ProductListContainer, {}, productsPane.find('.content'));
 
             this.$node.html(content);
 
             $(document.body).toggleClass('animatelogin', !!this.attr.animateFromLogin);
 
-
             this.triggerPaneResized();
             this.dataRequest('config', 'properties')
                 .done(function(properties) {
                     var name = dashboardPane.data(DATA_MENUBAR_NAME),
-                        defaultKey = 'menubar.default.selected';
+                        defaultKey = 'menubar.default.selected',
+                        urlSpecifiedTools = self.attr.openMenubarTools;
 
+                    if (urlSpecifiedTools) {
+                        _.each(urlSpecifiedTools, function(options = {}, name) {
+                            self.trigger(document, 'menubarToggleDisplay', { name, options });
+                        })
+                    }
                     if (properties[defaultKey]) {
                         name = properties[defaultKey];
                     }
-                    self.trigger(document, 'menubarToggleDisplay', { name: name });
+                    if (!urlSpecifiedTools) {
+                        self.trigger(document, 'menubarToggleDisplay', { name: name });
+                    }
 
                     if (self.attr.animateFromLogin) {
                         $(document.body).on(TRANSITION_END, function(e) {
@@ -256,9 +262,6 @@ define([
         });
 
         this.onPrivilegesReady = function() {
-            if (this.attr.addVertexIds) {
-                this.handleAddToWorkspace(this.attr.addVertexIds);
-            }
             if (this.attr.openAdminTool && Privileges.canADMIN) {
                 this.trigger('menubarToggleDisplay', { name: 'admin' });
                 this.trigger('showAdminPlugin', this.attr.openAdminTool);
@@ -278,6 +281,16 @@ define([
                 });
             });
             this.trigger('loadCurrentWorkspace');
+        };
+
+        this.attachReactComponentWithStore = function(Comp, props, div) {
+            return visalloData.storePromise.then(function(store) {
+                var component = React.createElement(Comp, props || {}),
+                    provider = React.createElement(redux.Provider, { store }, component),
+                    node = _.isFunction(div.get) ? div.get(0) : div;
+
+                ReactDom.render(provider, node);
+            })
         };
 
         this.onRegisterForPositionChanges = function(event, data) {
@@ -303,10 +316,43 @@ define([
             }
         };
 
-        this.onToggleTimeline = function(event) {
-            WorkspaceTimeline.attachTo(this.$node.find('.workspace-timeline'));
+        this.onOpenFullscreen = function(event, data) {
+            var self = this,
+                req,
+                F;
 
-            this.$node.toggleClass('workspace-timeline-visible');
+            if (!data) return;
+
+            Promise.require('util/vertex/formatters')
+                .then(function(_F) {
+                    F = _F;
+                    return F.vertex.getVertexIdsFromDataEventOrCurrentSelection(data, { async: true });
+                })
+                .then(function(elementIds) {
+                    return self.dataRequest('vertex', 'store', { vertexIds: elementIds })
+                })
+                .then(function(elements) {
+                    var url = F.vertexUrl.url(
+                            _.isArray(elements) ? elements : [elements],
+                            visalloData.currentWorkspaceId
+                        );
+                    window.open(url);
+                })
+        };
+
+        this.onToggleTimeline = function(event) {
+            var $button = $('.toggle-timeline');
+            if ($button.is(':visible')) {
+                WorkspaceTimeline.attachTo(this.$node.find('.workspace-timeline'));
+                this.$node.toggleClass('workspace-timeline-visible');
+                $button.toggleClass('expanded');
+                if (!this.$node.hasClass('workspace-timeline-visible')) {
+                    this.$node.find('.workspace-timeline').teardownComponent(WorkspaceTimeline);
+                }
+            } else {
+                this.$node.removeClass('workspace-timeline-visible');
+                $button.removeClass('expanded');
+            }
         };
 
         this.onWarnAboutContextMenuDisabled = function() {
@@ -319,21 +365,6 @@ define([
             _.delay(function() {
                 warning.hide();
             }, 5000)
-        };
-
-        this.handleAddToWorkspace = function(addVertexIds) {
-            var self = this;
-
-            require(['util/popovers/addToWorkspace/addToWorkspace'], function(AddToWorkspace) {
-                AddToWorkspace.attachTo(self.node, {
-                    addVertexIds: addVertexIds,
-                    overlay: true,
-                    teardownOnTap: false,
-                    anchorTo: {
-                        page: 'center'
-                    }
-                });
-            });
         };
 
         this.onGenericPaste = function(event, data) {
@@ -401,9 +432,13 @@ define([
                 extension = fileImportExtensionsByMimeType[mimeType];
                 extension.handler(thing[0], event);
             } else {
-                require(['util/popovers/fileImport/fileImport'], function(FileImport) {
-                    FileImport.attachTo(event.target, config);
-                });
+                // Just allow drop in graph for now.
+                var $graph = $('.visible .org-visallo-graph');
+                if ($graph.length) {
+                    require(['util/popovers/fileImport/fileImport'], function(FileImport) {
+                        FileImport.attachTo($graph, config);
+                    });
+                }
             }
         };
 
@@ -442,7 +477,9 @@ define([
             data.element = event.target;
 
             VertexMenu.teardownAll();
-            VertexMenu.attachTo(document.body, data);
+            if (data && data.vertexId) {
+                VertexMenu.attachTo(document.body, data);
+            }
         };
 
         this.onMapAction = function(event, data) {
@@ -490,7 +527,7 @@ define([
                 showLoginComponent = function() {
                     self.trigger('didLogout');
 
-                    $('.dialog-popover').remove();
+                    $('.dialog-popover, .modal, .modal-backdrop, .popover').remove();
 
                     require(['login'], function(Login) {
                         $(document.body)
@@ -526,37 +563,38 @@ define([
 
         this.toggleDisplay = function(e, data) {
             var self = this,
-                SLIDE_OUT = 'search workspaces admin',
-                pane = this.select(data.name + 'Selector'),
+                SLIDE_OUT = 'search workspaces products admin',
+                name = data && (data.nameFull || data.name),
+                pane = this.select(name + 'Selector'),
                 deferred = $.Deferred(),
                 menubarExtensions = registry.extensionsForPoint('org.visallo.menubar'),
                 extension;
 
-            if (data && data.name) {
-                extension = _.findWhere(menubarExtensions, { identifier: data.name });
+            if (name) {
+                extension = _.findWhere(menubarExtensions, { identifier: name });
                 if (extension) {
                     data = extension;
-                    data.name = data.identifier;
+                    name = data.identifier;
                 }
             }
 
             if (data.action) {
-                pane = this.$node.find('.' + data.name + '-pane');
+                pane = this.$node.find('.' + name + '-pane');
 
                 if (data.action.type === 'pane') {
-                    SLIDE_OUT += (' ' + data.name);
+                    SLIDE_OUT += (' ' + name);
                 }
 
                 if (pane.length) {
                     deferred.resolve();
                 } else {
                     pane = $('<div>')
-                        .data('widthPreference', data.name)
+                        .data('widthPreference', name)
                         .addClass((data.action.type === 'full' ? 'fullscreen' : 'plugin') +
                                   '-pane ' +
-                                  data.name + '-pane')
+                                  name + '-pane')
                         .appendTo(this.$node)
-                        .data(DATA_MENUBAR_NAME, data.name);
+                        .data(DATA_MENUBAR_NAME, name);
 
                     if (data.action.type === 'pane') {
                         $('<div class="content">').appendTo(pane);
@@ -565,15 +603,19 @@ define([
                                   this.onResizeCreateLoad.bind(this));
                     }
 
-                    require([data.action.componentPath], function(Component) {
-                        Component.attachTo(data.action.type === 'pane' ? pane.find('.content') : pane, {
-                            graphPadding: self.currentGraphPadding
+                    var node = data.action.type === 'pane' ? pane.find('.content') : pane;
+                    var options = { graphPadding: self.currentGraphPadding };
+
+                    attacher()
+                        .node(node)
+                        .path(data.action.componentPath)
+                        .attach(options)
+                        .then(function() {
+                            deferred.resolve();
                         });
-                        deferred.resolve();
-                    });
                 }
             } else if (pane.length === 0) {
-                pane = this.$node.find('.' + data.name + '-pane');
+                pane = this.$node.find('.' + name + '-pane');
                 deferred.resolve();
             } else {
                 deferred.resolve();
@@ -582,19 +624,21 @@ define([
             deferred.done(function() {
                 var isVisible = pane.is('.visible');
 
-                if (data.name === 'logout') {
+                if (name === 'logout') {
                     return this.logout();
                 }
 
-                if (data.name === 'map' && !pane.hasClass('visible')) {
+                if (name === 'map' && !pane.hasClass('visible')) {
                     this.trigger(document, 'mapShow', (data && data.data) || {});
                 }
 
-                if (SLIDE_OUT.indexOf(data.name) >= 0) {
+                var type = 'full';
+                if (SLIDE_OUT.indexOf(name) >= 0) {
+                    type = 'pane';
                     pane.one(TRANSITION_END, function() {
                         pane.off(TRANSITION_END);
                         if (!isVisible) {
-                            self.trigger(data.name + 'PaneVisible');
+                            self.trigger(name + 'PaneVisible');
                         }
                         self.triggerPaneResized(isVisible ? null : pane);
                     });
@@ -603,12 +647,11 @@ define([
                 // Can't toggleClass because if only one is visible we want to hide all
                 if (isVisible) {
                     pane.removeClass('visible');
-                } else if (data.name === 'graph') {
-                    pane.filter('.graph-pane-' + (this._graphDimensions || 2) + 'd').addClass('visible');
                 } else pane.addClass('visible');
 
                 this.trigger('didToggleDisplay', {
-                    name: data.name,
+                    name: name,
+                    type: type,
                     visible: !isVisible
                 })
             }.bind(this));
@@ -664,6 +707,10 @@ define([
                     $('.workspace-form:visible:not(.collapsed)')
                         .outerWidth(true) || 0 : 0,
 
+                productWidth = this.select('productSelector')
+                    .filter('.visible:not(.collapsed)')
+                    .outerWidth(true) || 0,
+
                 extensionPaneWidth = this.select('extensionPanesSelector')
                     .filter('.visible:not(.collapsed)')
                     .outerWidth(true) || 0,
@@ -688,6 +735,7 @@ define([
                 padding = {
                     l: searchWidth + searchResultsWidth +
                        workspacesWidth + workspaceFormWidth +
+                       productWidth +
                        adminWidth + adminFormWidth +
                        extensionPaneWidth + extensionSubPaneWidth,
                     r: detailWidth,
@@ -745,6 +793,27 @@ define([
 
             this.currentGraphPadding = padding;
             this.trigger(document, 'graphPaddingUpdated', { padding: padding });
+            this.updateStorePadding(padding);
+        };
+
+        this.updateStorePadding = function(padding) {
+            if (this._updateStorePadding) {
+                this._updateStorePadding(padding);
+            } else {
+                Promise.all([
+                    visalloData.storePromise,
+                    Promise.require('data/web-worker/store/panel/actions')
+                ]).spread((store, actions) => {
+                    this._updateStorePadding = function(padding) {
+                        store.dispatch(actions.setPadding({
+                            top: padding.t,
+                            right: padding.r,
+                            bottom: padding.b,
+                            left: padding.l
+                        }))
+                    }
+                })
+            }
         };
 
         this.availablePaneWidth = function(withoutPane, openPanesOut) {
@@ -776,10 +845,11 @@ define([
                 $pane = $(event.target),
                 sizePaneName = $pane.data('sizePreference'),
                 widthPaneName = !sizePaneName && $pane.data('widthPreference'),
+                heightPaneName = !sizePaneName && $pane.data('heightPreference'),
                 nameToPref = function(name) {
                     return name && ('pane-' + name);
                 },
-                prefName = nameToPref(sizePaneName || widthPaneName),
+                prefName = nameToPref(sizePaneName || widthPaneName || heightPaneName),
                 userPrefs = user.uiPreferences,
                 value = userPrefs && prefName in userPrefs && userPrefs[prefName];
 
@@ -791,6 +861,8 @@ define([
                 }
             } else if (widthPaneName && value) {
                 $pane.width(parseInt(value, 10));
+            } else if (heightPaneName && value) {
+                $pane.height(parseInt(value, 10));
             } else if (!prefName && !$pane.is('.facebox')) {
                 console.warn(
                     'No data-width-preference or data-size-preference ' +
@@ -809,7 +881,9 @@ define([
         this.onResizeStopSave = function(event, ui) {
             var sizePaneName = ui.helper.data('sizePreference'),
                 widthPaneName = ui.helper.data('widthPreference'),
-                key = 'pane-',
+                heightPaneName = ui.helper.data('heightPreference'),
+                keyPrefix = 'pane-',
+                key = keyPrefix,
                 value;
 
             if (sizePaneName) {
@@ -818,15 +892,21 @@ define([
             } else if (widthPaneName) {
                 key += widthPaneName;
                 value = ui.element.width();
+            } else if (heightPaneName) {
+                key += heightPaneName;
+                value = ui.element.height();
             }
 
-            this.dataRequest('user', 'preference', key, value)
+            if (key !== keyPrefix && !_.isUndefined(value)) {
+                this.dataRequest('user', 'preference', key, value)
+            }
         };
 
         this.collapseAllPanes = function() {
             this.collapse([
                 this.select('searchSelector'),
                 this.select('workspacesSelector'),
+                this.select('productSelector'),
                 this.select('adminSelector'),
                 this.select('detailPaneSelector'),
                 this.select('activitySelector'),
@@ -888,4 +968,17 @@ define([
         });
     }
 
+    function fixMultipleBootstrapModals() {
+        $(document).on('show.bs.modal', '.modal', function() {
+            var zIndex = 10 + _.max(
+                _.map($('.modal'), function(modal) {
+                    return parseInt($(modal).css('z-index'), 10);
+                })
+            );
+            $(this).css('z-index', zIndex);
+            setTimeout(function() {
+                $('.modal-backdrop').not('.modal-stack').css('z-index', zIndex - 1).addClass('modal-stack');
+            }, 0);
+        });
+    }
 });

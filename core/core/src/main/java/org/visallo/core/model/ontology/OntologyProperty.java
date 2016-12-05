@@ -21,6 +21,8 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 public abstract class OntologyProperty {
     public static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd");
     public static final SimpleDateFormat DATE_TIME_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm");
@@ -73,6 +75,10 @@ public abstract class OntologyProperty {
 
     public abstract String[] getIntents();
 
+    public abstract String[] getTextIndexHints();
+
+    public abstract void addTextIndexHints(String textIndexHints, Authorizations authorizations);
+
     public abstract void addIntent(String intent, Authorizations authorizations);
 
     public abstract void removeIntent(String intent, Authorizations authorizations);
@@ -124,10 +130,54 @@ public abstract class OntologyProperty {
             if (getIntents() != null) {
                 result.getIntents().addAll(Arrays.asList(getIntents()));
             }
+            if (getTextIndexHints() != null) {
+                result.getTextIndexHints().addAll(Arrays.asList(getTextIndexHints()));
+            }
             return result;
         } catch (JSONException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    public Object convert(Object value) throws ParseException {
+        if (value == null) {
+            return null;
+        }
+
+        PropertyType dataType = getDataType();
+        switch (dataType) {
+            case DATE:
+                if (value instanceof Date) {
+                    return value;
+                }
+                break;
+            case GEO_LOCATION:
+                if (value instanceof GeoPoint) {
+                    return value;
+                }
+                break;
+            case CURRENCY:
+                if (value instanceof BigDecimal) {
+                    return value;
+                }
+                break;
+            case DOUBLE:
+                if (value instanceof Double) {
+                    return value;
+                }
+                break;
+            case INTEGER:
+                if (value instanceof Integer) {
+                    return value;
+                }
+                break;
+            case BOOLEAN:
+                if (value instanceof Boolean) {
+                    return value;
+                }
+                break;
+        }
+        return convertString(value.toString());
     }
 
     public Object convertString(String valueStr) throws ParseException {
@@ -158,6 +208,26 @@ public abstract class OntologyProperty {
 
     public static Object convert(JSONArray values, PropertyType propertyDataType, int index) throws ParseException {
         switch (propertyDataType) {
+            case DIRECTORY_ENTITY:
+                if (values.get(index) instanceof String) {
+                    return values.get(index);
+                }
+                if (values.get(index) instanceof JSONObject) {
+                    JSONObject json = values.getJSONObject(index);
+                    String id = json.optString("id");
+                    checkNotNull(id, "id is a required field for directory entity json");
+                    return id;
+                } else {
+                    String valueStr = values.getString(index);
+                    try {
+                        JSONObject json = new JSONObject(valueStr);
+                        String id = json.optString("id");
+                        checkNotNull(id, "id is a required field for directory entity json");
+                        return id;
+                    } catch (JSONException ex) {
+                        return valueStr;
+                    }
+                }
             case DATE: {
                 String valueStr = values.getString(index);
                 return parseDateTime(valueStr);
@@ -254,6 +324,7 @@ public abstract class OntologyProperty {
             case INTEGER:
                 return new IntegerVisalloProperty(getIri());
             case STRING:
+            case DIRECTORY_ENTITY:
                 return new StringVisalloProperty(getIri());
             default:
                 throw new VisalloException("Could not get " + VisalloProperty.class.getName() + " for data type " + getDataType());

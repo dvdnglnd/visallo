@@ -29,7 +29,8 @@ define([
 
         this.before('initialize', function(node, config) {
             if (config.vertex) {
-                if (config.vertex.length > 1) {
+                config.multiple = config.vertex.length > 1;
+                if (config.multiple) {
                     config.title = i18n('popovers.add_related.title_multiple', config.vertex.length);
                 } else {
                     config.title = '"' + F.vertex.title(config.vertex[0]) + '"';
@@ -114,25 +115,17 @@ define([
         this.onPromptAdd = function(event) {
             var self = this;
 
-            this.trigger('updateWorkspace', {
-                options: {
-                    selectAll: true
-                },
-                entityUpdates: this.promptAddVertices.map(function(vertex) {
-                    return {
-                        vertexId: vertex.id,
-                        graphLayoutJson: {
-                            relatedToVertexId: self.attr.relatedToVertexIds[0]
-                        }
-                    };
-                })
-            });
+            this.trigger('addRelatedDoAdd', {
+                addVertices: this.promptAddVertices,
+                relatedToVertexIds: self.attr.relatedToVertexIds
+            })
+
             this.teardown();
         };
 
         this.onCancel = function() {
             if (this.relatedRequest) {
-                this.relatedRequest.abort();
+                this.relatedRequest.cancel();
             }
         };
 
@@ -180,19 +173,10 @@ define([
                         promptAdd.text(i18n('popovers.add_related.button.prompt_add', count)).show();
                     } else {
                         _.defer(function() {
-                            self.trigger('updateWorkspace', {
-                                options: {
-                                    selectAll: true
-                                },
-                                entityUpdates: vertices.map(function(vertex) {
-                                    return {
-                                        vertexId: vertex.id,
-                                        graphLayoutJson: {
-                                            relatedToVertexId: self.attr.relatedToVertexIds[0]
-                                        }
-                                    };
-                                })
-                            });
+                            self.trigger('addRelatedDoAdd', {
+                                addVertices: vertices,
+                                relatedToVertexIds: self.attr.relatedToVertexIds
+                            })
                         });
                         self.teardown();
                     }

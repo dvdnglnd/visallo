@@ -16,33 +16,27 @@ define([
             createItems = function() {
                 return [
                     {
-                        cls: 'requires-EDIT',
-                        label: i18n('vertex.contextmenu.connect'),
-                        shortcut: 'CTRL+drag',
-                        event: 'startVertexConnection',
-                        selection: 1,
-                        args: {
-                            connectionType: 'CreateConnection'
-                        },
-                        shouldDisable: function(selection, vertexId, target) {
-                            return $(target).closest('.graph-pane').length === 0;
-                        }
+                        label: i18n('vertex.contextmenu.open'),
+                        submenu: [
+                            {
+                                label: i18n('vertex.contextmenu.open.fullscreen'),
+                                subtitle: i18n('vertex.contextmenu.open.fullscreen.subtitle'),
+                                event: 'openFullscreen'
+                            }
+                        ]
                     },
-
                     {
-                        label: i18n('vertex.contextmenu.find_path'),
-                        shortcut: 'CTRL+drag',
-                        event: 'startVertexConnection',
-                        selection: 1,
-                        args: {
-                            connectionType: 'FindPath'
-                        },
-                        shouldDisable: function(selection, vertexId, target) {
-                            return $(target).closest('.graph-pane').length === 0;
-                        }
+                        label: i18n('vertex.contextmenu.select'),
+                        submenu: [
+                            {
+                                label: i18n('vertex.contextmenu.select.connected'),
+                                subtitle: i18n('vertex.contextmenu.select.connected.subtitle'),
+                                shortcut: 'meta-e',
+                                event: 'selectConnected',
+                                selection: 1
+                            }
+                        ]
                     },
-
-                    DIVIDER,
 
                     {
                         label: i18n('vertex.contextmenu.search'),
@@ -53,18 +47,12 @@ define([
                                 subtitle: i18n('graph.contextmenu.search.related.subtitle'),
                                 shortcut: 'alt+s',
                                 event: 'searchRelated',
-                                selection: 1
+                                selection: 1,
+                                shouldDisable: function(currentSelection) {
+                                    return Object.keys(currentSelection).length > 1;
+                                }
                             }
                         ]
-                    },
-
-                    {
-                        label: i18n('vertex.contextmenu.add_related'),
-                        event: 'addRelatedItems',
-                        shortcut: 'alt+r',
-                        shouldDisable: function(selection, vertexId, target) {
-                            return !visalloData.currentWorkspaceEditable;
-                        }
                     },
 
                     DIVIDER,
@@ -89,7 +77,6 @@ define([
 
         this.after('teardown', function() {
             this.$menu.remove();
-            $('.draggable-wrapper').remove();
             $(document).off('.vertexMenu');
         });
 
@@ -153,12 +140,7 @@ define([
 
         this.setupMenu = function(vertex) {
             var self = this,
-                title = F.string.truncate(F.vertex.title(vertex), 3),
-                wrapper = $('.draggable-wrapper');
-
-            if (wrapper.length === 0) {
-                wrapper = $('<div class="draggable-wrapper"/>').appendTo(document.body);
-            }
+                title = F.string.truncate(F.vertex.title(vertex), 3);
 
             this.$node.append(template({
                 items: this.appendMenuExtensions(vertex, createItems()),
@@ -168,7 +150,8 @@ define([
                         shouldDisable = _.isFunction(item.shouldDisable) ? item.shouldDisable(
                             currentSelection,
                             self.attr.vertexId,
-                            self.attr.element) : false;
+                            self.attr.element,
+                            vertex) : false;
 
                     return shouldDisable;
                 },

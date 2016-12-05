@@ -10,9 +10,9 @@ define([
     'util/requirejs/promise!util/service/ontologyPromise',
     'util/vertex/formatters',
     'util/withDataRequest',
+    'util/dnd',
     'util/popovers/withElementScrollingPositionUpdates',
-    'util/jquery.withinScrollable',
-    'util/jquery.ui.draggable.multiselect'
+    'util/jquery.withinScrollable'
 ], function(
     defineComponent,
     registry,
@@ -24,6 +24,7 @@ define([
     ontologyPromise,
     F,
     withDataRequest,
+    dnd,
     withPositionUpdates) {
     'use strict';
 
@@ -43,30 +44,10 @@ define([
 
         this.defaultAttrs({
             itemSelector: 'ul > li.element-item',
+            draggableSelector: '.element-item a.draggable',
             infiniteScrolling: false,
             usageContext: 'search'
         });
-
-        this.stateForItem = function($item) {
-            var $a = $item.children('a'),
-                vertexId = $a.data('vertexId'),
-                edgeId = $a.data('edgeId'),
-                inWorkspace = (vertexId && vertexId in this.workspaceVertices) ||
-                              (edgeId && edgeId in this.workspaceEdges),
-                inMap = false;
-
-            if (vertexId && inWorkspace) {
-                return this.dataRequest('vertex', 'store', { vertexIds: [vertexId] }).then(function(vertices) {
-                    inMap = vertices.length && _.some(vertices[0].properties, function(p) {
-                        var ontologyProperty = ontologyPromise.properties.byTitle[p.name];
-                        return ontologyProperty && ontologyProperty.dataType === 'geoLocation';
-                    });
-                    return { inGraph: inWorkspace, inMap: inMap };
-                });
-            }
-
-            return Promise.resolve({ inGraph: inWorkspace, inMap: inMap });
-        };
 
         this.after('initialize', function() {
             var self = this;
@@ -75,7 +56,6 @@ define([
             // deprecated vertex/list and edge/list components
             this.attr.items = this.attr.items || this.attr.edges || this.attr.vertices;
 
-            this.workspaceEdges = _.indexBy(visalloData.workspaceEdges, 'edgeId');
             this.renderers = registry.extensionsForPoint(EXTENSION_POINT_NAME).concat([
                 { canHandle: function(item, usageContext) {
                         return usageContext === 'detail/relationships' &&
@@ -87,6 +67,10 @@ define([
                 { canHandle: function(item) { return F.vertex.isVertex(item); }, component: VertexItem }
             ])
 
+            this.on('click', {
+                draggableSelector: this.onClick
+            });
+
             var rendererPromises = _.map(this.renderers, function(extension) {
                     if (extension.componentPath && !extension.component) {
                         return Promise.require(extension.componentPath).then(function(component) {
@@ -96,10 +80,7 @@ define([
                     return Promise.resolve();
                 });
 
-            Promise.all(
-                    [this.dataRequest('workspace', 'store')].concat(rendererPromises)
-                ).done(function(promiseResults) {
-                    self.workspaceVertices = promiseResults[0];
+            Promise.all(rendererPromises).done(function(promiseResults) {
                     self.$node
                         .addClass('element-list')
                         .html(template({
@@ -125,36 +106,64 @@ define([
                     self.on('downUp', self.move);
                     self.on('upUp', self.move);
                     self.on('contextmenu', self.onContextMenu);
-                    self.on(document, 'workspaceUpdated', self.onWorkspaceUpdated);
                     self.trigger('renderFinished');
 
                     _.defer(function() {
                         self.$node.scrollTop(0);
                     })
+                    self.trigger('listRendered');
             });
         });
 
-        this.onWorkspaceUpdated = function(event, data) {
-            var self = this;
-            this.dataRequest('workspace', 'store')
-                .done(function(workspaceVertices) {
-                    self.workspaceVertices = workspaceVertices;
+        this.onClick = function(event) {
+            event.preventDefault();
 
-                    var addedVertices = _.indexBy(data.newVertices, 'id'),
-                        removedVertices = _.indexBy(data.entityDeletes);
+            const {vertexIds, edgeIds} = visalloData.selectedObjects;
+            const $target = $(event.target).parents('li');
+            const pushData = (data) => {
+                if (data.vertexId) selectVertexIds.push(data.vertexId)
+                if (data.edgeId) selectEdgeIds.push(data.edgeId)
+            };
 
-                    self.select('itemSelector').each(function(idx, item) {
-                        var $item = $(item),
-                            vertexId = $item.children('a').data('vertexId');
-                        if (vertexId in addedVertices) {
-                            self.stateForItem($item).then(function(itemState) {
-                                $item.addClass('graph-displayed').toggleClass('map-displayed', itemState.inMap);
-                            });
-                        } else if (vertexId in removedVertices) {
-                            $item.removeClass('graph-displayed map-displayed');
-                        }
-                    });
-                });
+            var data = $(event.target).closest('a.draggable').data();
+            var [selectVertexIds, selectEdgeIds] = [[], []];
+
+            if (!this.attr.singleSelection) {
+                const targetIndex = $target.index();
+
+                if (event.shiftKey) {
+                    const index = this.lastClickedIndex || 0;
+                    const min = Math.min(index, targetIndex);
+                    const max = Math.max(index, targetIndex);
+                    const $items = $target.parent().children();
+                    for (let i = min; i <= max; i++) {
+                        pushData($items.eq(i).find('a.draggable').data());
+                    }
+                } else if (event.metaKey || event.ctrlKey) {
+                    selectVertexIds = Object.keys(vertexIds);
+                    selectEdgeIds = Object.keys(edgeIds);
+                } else {
+                    if (data.vertexId && data.vertexId in vertexIds &&
+                        Object.keys(vertexIds).length === 1) {
+                        data = {};
+                    }
+                    if (data.edgeId && data.edgeId in edgeIds &&
+                        Object.keys(edgeIds).length === 1) {
+                        data = {};
+                    }
+                }
+
+                if (!event.shiftKey) {
+                    this.lastClickedIndex = targetIndex;
+                }
+            }
+
+            pushData(data);
+
+            this.trigger('selectObjects', {
+                vertexIds: selectVertexIds,
+                edgeIds: selectEdgeIds
+            })
         };
 
         this.onContextMenu = function(evt) {
@@ -186,7 +195,7 @@ define([
                 if (vertexId) selectedVertexIds.push(vertexId);
                 if (edgeId) selectedEdgeIds.push(edgeId);
 
-                this.trigger(document, 'defocusVertices');
+                this.trigger(document, 'defocusElements');
                 this.trigger('selectObjects', { vertexIds: selectedVertexIds, edgeIds: selectedEdgeIds });
             }
         };
@@ -199,6 +208,7 @@ define([
         };
 
         this.after('teardown', function() {
+            this.trigger(document, 'defocusElements');
             this.select('itemSelector').children('a').teardownAllComponents();
             this.$node.off('mouseenter mouseleave');
             this.scrollNode.off('scroll.elementList');
@@ -218,8 +228,7 @@ define([
             this.on(document, 'verticesDeleted', this.onVerticesDeleted);
             this.on(document, 'edgesDeleted', this.onEdgesDeleted);
             this.on(document, 'objectsSelected', this.onObjectsSelected);
-            this.on(document, 'switchWorkspace', this.onWorkspaceClear);
-            this.on(document, 'workspaceDeleted', this.onWorkspaceClear);
+            this.on('objectsSelected', this.onObjectsSelected);
             this.on(document, 'workspaceLoaded', this.onWorkspaceLoaded);
             this.on('addInfiniteItems', this.onAddInfiniteItems);
         };
@@ -229,14 +238,19 @@ define([
                 return;
             } else if (this.disableHover) {
                 this.disableHover = 'defocused';
-                return this.trigger(document, 'defocusVertices');
+                return this.trigger(document, 'defocusElements');
             }
 
-            var id = $(evt.target).closest('.element-item').children('a').data('vertexId');
-            if (evt.type === 'mouseenter' && id) {
-                this.trigger(document, 'focusVertices', { vertexIds: [id] });
+            var $anchor = $(evt.target).closest('.element-item').children('a'),
+                vertexId = $anchor.data('vertexId'),
+                edgeId = $anchor.data('edgeId');
+
+            if (evt.type === 'mouseenter' && vertexId) {
+                this.trigger(document, 'focusElements', { vertexIds: [vertexId] });
+            } else if (evt.type === 'mouseenter' && edgeId) {
+                this.trigger(document, 'focusElements', { edgeIds: [edgeId] });
             } else {
-                this.trigger(document, 'defocusVertices');
+                this.trigger(document, 'defocusElements');
             }
         };
 
@@ -281,19 +295,24 @@ define([
 
             el.children('a').teardownAllComponents();
             el.empty();
-            itemRenderer.attachTo($('<a class="draggable" />').appendTo(el), { item: item, usageContext: usageContext });
+            itemRenderer.attachTo($('<a class="draggable"/>').appendTo(el), { item: item, usageContext: usageContext });
 
-            this.stateForItem(el).then(function(itemState) {
-                if (itemState.inGraph) el.addClass('graph-displayed');
-                if (itemState.inMap) el.addClass('map-displayed');
-            });
-
-            this.applyDraggable(el.children('a.draggable'));
+            this.applyDraggable(el[0]);
 
             return el;
         };
 
         this.addItems = function(items) {
+            if (items.length && 'vertex' in items[0]) {
+                this._items = {
+                    ...(this._items || {}),
+                    ...(_.indexBy(_.pluck(items, 'vertex'), 'id')),
+                    ...(_.indexBy(_.pluck(items, 'relationship'), 'id'))
+                };
+            } else {
+                this._items = { ...(this._items || {}), ...(_.indexBy(items, 'id')) };
+            }
+
             var self = this,
                 loading = this.$node.find('.infinite-loading'),
                 added = _.reduce(items, function(selection, item) {
@@ -350,22 +369,24 @@ define([
         this.applyDraggable = function(el) {
             var self = this;
 
-            el.draggable({
-                helper: 'clone',
-                appendTo: 'body',
-                revert: 'invalid',
-                revertDuration: 250,
-                scroll: false,
-                zIndex: 100,
-                distance: 10,
-                multi: true,
-                start: function(ev, ui) {
-                    $(ui.helper).addClass('vertex-dragging');
-                },
-                selection: function(ev, ui) {
-                    self.selectItems(ui.selected);
-                }
-            });
+            el.setAttribute('draggable', true)
+            el.addEventListener('dragstart', function(e) {
+                const $target = $(e.target);
+                const elements = [];
+
+                $target.siblings('.active').andSelf().each(function() {
+                    var data = $(this).find('a.draggable').data();
+                    if (data.vertexId) {
+                        elements.push(self._items[data.vertexId])
+                    }
+                    if (data.edgeId) {
+                        elements.push(self._items[data.edgeId])
+                    }
+                })
+                const dt = e.dataTransfer;
+                dt.effectAllowed = 'all';
+                dnd.setDataTransferWithElements(dt, { elements })
+            }, false)
         };
 
         this.selectItems = function(items) {
@@ -384,20 +405,12 @@ define([
                 return;
             }
 
-            this.trigger(document, 'defocusVertices');
+            this.trigger(document, 'defocusElements');
             this.trigger('selectObjects', selection);
         };
 
         this.onWorkspaceLoaded = function(evt, workspace) {
             this.onVerticesUpdated(evt, workspace.data || {});
-        };
-
-        // Switching workspaces should clear the icon state and vertices
-        this.onWorkspaceClear = function(event, data) {
-            if (event.type !== 'workspaceDeleted' || visalloData.currentWorkspaceId === data.workspaceId) {
-                this.select('itemSelector').filter('.graph-displayed').removeClass('graph-displayed');
-                this.select('itemSelector').filter('.map-displayed').removeClass('map-displayed');
-            }
         };
 
         this.onVerticesUpdated = function(event, data) {
@@ -446,13 +459,15 @@ define([
         this.onObjectsSelected = function(event, data) {
             var self = this,
                 vertexIds = _.pluck(data.vertices, 'id'),
-                edgeIds = _.pluck(data.edges, 'id');
+                edgeIds = _.pluck(data.edges, 'id'),
+                total = vertexIds.length + edgeIds.length;
 
             this.$node.children('ul').children('.active').removeClass('active');
 
             if (vertexIds.length === 0 && edgeIds.length === 0) {
                 return;
             }
+            if (this.attr.showSelected === false && total > 1) return;
 
             this.$node.addClass('active');
             this.select('itemSelector').each(function(idx, item) {
@@ -462,6 +477,9 @@ define([
                 if ((itemVertexId && _.contains(vertexIds, itemVertexId)) ||
                     (itemEdgeId && _.contains(edgeIds, itemEdgeId))) {
                     $item.addClass('active');
+                    self.trigger($item.children('a'), 'itemActivated');
+                } else {
+                    self.trigger($item.children('a'), 'itemDeactivated');
                 }
             });
         };

@@ -51,6 +51,9 @@ define([
             if ('endDate' in options && !options.endDate) {
                 delete options.endDate;
             }
+            if ('externalUrl' in options && !options.externalUrl) {
+                delete options.externalUrl;
+            }
             return ajax('POST', '/notification/system', options);
         },
 
@@ -66,27 +69,6 @@ define([
             });
         },
 
-        userUpdatePrivileges: function(userName, privileges) {
-            return ajax('POST', '/user/privileges/update', {
-                'user-name': userName,
-                privileges: _.isArray(privileges) ? privileges.join(',') : privileges
-            });
-        },
-
-        userAuthAdd: function(userName, auth) {
-            return ajax('POST', '/user/auth/add', {
-                'user-name': userName,
-                auth: auth
-            });
-        },
-
-        userAuthRemove: function(userName, auth) {
-            return ajax('POST', '/user/auth/remove', {
-                'user-name': userName,
-                auth: auth
-            });
-        },
-
         workspaceShare: function(workspaceId, userName) {
             return ajax('POST', '/workspace/shareWithMe', {
                 'user-name': userName,
@@ -98,29 +80,6 @@ define([
             var formData = new FormData();
             formData.append('workspace', workspaceFile);
             return ajax('POST->HTML', '/admin/workspace/import', formData);
-        },
-
-        queueVertices: function(priority, conceptType, propertyName) {
-            var data = {
-                priority: priority
-            };
-            if (conceptType) {
-                data.conceptType = conceptType;
-            }
-            if (propertyName) {
-                data.propertyName = propertyName;
-            }
-            return ajax('POST->HTML', '/admin/queueVertices', data);
-        },
-
-        queueEdges: function(priority, label) {
-            var data = {
-                priority: priority
-            };
-            if (label) {
-                data.label = label;
-            }
-            return ajax('POST->HTML', '/admin/queueEdges', data);
         },
 
         ontologyUpload: function(iri, file) {

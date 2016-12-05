@@ -35,6 +35,7 @@ define([
             justificationSelector: '.justification',
             conceptSelector: '.concept-container',
             singleSelector: '.single',
+            singleVisibilitySelector: '.single .visibility',
             individualVisibilitySelector: '.individual-visibility'
         });
 
@@ -66,10 +67,6 @@ define([
             this.after('setupWithTemplate', function() {
                 var self = this;
 
-                this.mousePosition = {
-                    x: window.lastMousePositionX,
-                    y: window.lastMousePositionY
-                };
                 this.visibilitySource = null;
                 this.visibilitySources = new Array(config.files.length);
                 this.concepts = new Array(config.files.length);
@@ -88,15 +85,6 @@ define([
                 this.on(this.popover, 'change', {
                     toggleCheckboxSelector: this.onCheckboxCopy,
                     importFileSelector: this.onFileChange
-                })
-
-                this.on(this.popover, 'keyup', {
-                    visibilityInputSelector: function(e) {
-                        if ($(e.target).closest('.single').length &&
-                            e.which === $.ui.keyCode.ENTER) {
-                            this.onImport();
-                        }
-                    }
                 })
 
                 this.setFiles(this.attr.files);
@@ -184,10 +172,12 @@ define([
             var $checkbox = $(e.target),
                 checked = $checkbox.is(':checked');
 
+            this.popover.find(this.attr.singleSelector).toggle(checked);
             this.popover.toggleClass('collapseVisibility', checked);
             this.popover.find(this.attr.individualVisibilitySelector).toggle(!checked);
             this.popover.find('.errors').empty();
             _.delay(this.positionDialog.bind(this), 50);
+            this.checkValid();
         };
 
         this.onConceptChange = function(event, data) {
@@ -226,6 +216,7 @@ define([
         };
 
         this.checkValid = function() {
+            var self = this;
             var collapsed = this.isVisibilityCollapsed(),
                 isValid = collapsed ?
                     (this.visibilitySource && this.visibilitySource.valid &&
@@ -234,6 +225,17 @@ define([
                     ) :
                     _.every(this.visibilitySources, _.property('valid'));
 
+            if (collapsed) {
+                this.popover.find(this.attr.singleVisibilitySelector).find('input').toggleClass('invalid', !isValid);
+            } else {
+                this.popover.find(this.attr.individualVisibilitySelector).find('.visibility').each(function() {
+                    var $visibility = $(this);
+                    var fileIndex = $visibility.data('fileIndex')
+                    var visibilityValid = self.visibilitySources[fileIndex].valid;
+
+                    $visibility.find('input').toggleClass('invalid', !visibilityValid);
+                });
+            }
             if (isValid && this.attr.files.length === 0 && !this.concept) {
                 isValid = false;
             }
@@ -305,22 +307,13 @@ define([
 
             this.request.then(function(result) {
                 var vertexIds = _.isArray(result.vertexIds) ? result.vertexIds : [result.id];
-                self.trigger('updateWorkspace', {
-                    options: {
-                        selectAll: true
-                    },
-                    entityUpdates: vertexIds.map(function(vId, i) {
-                        var page = self.attr.anchorTo.page;
-                        return {
-                            vertexId: vId,
-                            graphLayoutJson: i === 0 ? {
-                                pagePosition: page && page.x && page.y ?
-                                    page : self.mousePosition
-                            } : {}
-                        }
-                    })
-                });
-                self.teardown();
+                var page = self.attr.anchorTo.page;
+
+                self.trigger('fileImportSuccess', { vertexIds, position: page });
+
+                _.defer(function() {
+                    self.teardown();
+                })
             })
             .catch(function(error) {
                 self.attr.teardownOnTap = true;

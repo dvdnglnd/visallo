@@ -45,9 +45,15 @@ define(['../util/ajax'], function(ajax) {
         },
 
         delete: function(queryId) {
-            return ajax('DELETE', '/search', {
+            return ajax('DELETE->HTML', '/search', {
                 id: queryId
-            })
+            });
+        },
+
+        get: function(queryId) {
+            return ajax('GET', '/search', {
+                id: queryId
+            });
         },
 
         run: function(queryId, otherParams) {

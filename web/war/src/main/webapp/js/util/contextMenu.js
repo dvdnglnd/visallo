@@ -38,24 +38,32 @@ define([
                     switch (state) {
                         case 1:
                             var originalTabindex = target.getAttribute('tabindex'),
+                                targetIsField = $(target).is('input,select,textarea'),
+                                disableCheck = targetIsField,
                                 handler;
 
                             blurPromise = new Promise(function(v) {
-                                    target.setAttribute('tabindex', -1);
-                                    _.delay(function() {
+                                    if (disableCheck) {
                                         v(false);
-                                    }, 100);
-                                    self.on(target, 'blur', handler = function blurHandler(blurEvent) {
-                                        self.trigger(target, 'hideMenu');
-                                        v(true);
-                                    });
+                                    } else {
+                                        target.setAttribute('tabindex', -1);
+                                        _.delay(function() {
+                                            v(false);
+                                        }, 100);
+                                        self.on(target, 'blur', handler = function blurHandler(blurEvent) {
+                                            self.trigger(target, 'hideMenu');
+                                            v(true);
+                                        });
+                                    }
                                 })
                                 .tap(function() {
-                                    self.off(target, 'blur', handler);
-                                    if (originalTabindex) {
-                                        target.setAttribute('tabindex', originalTabindex);
-                                    } else {
-                                        target.removeAttribute('tabindex');
+                                    if (!disableCheck) {
+                                        self.off(target, 'blur', handler);
+                                        if (originalTabindex) {
+                                            target.setAttribute('tabindex', originalTabindex);
+                                        } else {
+                                            target.removeAttribute('tabindex');
+                                        }
                                     }
                                 });
                             break;
@@ -78,6 +86,7 @@ define([
                 };
 
             document.addEventListener('mousedown', function(event) {
+                if ($(event.target).closest('.dropdown-menu').length) return;
                 reset();
                 downPosition = [event.pageX, event.pageY];
                 altKey = event.altKey;
@@ -86,11 +95,13 @@ define([
             }, true);
 
             document.addEventListener('mouseup', function(event) {
+                if ($(event.target).closest('.dropdown-menu').length) return;
                 progressContextMenu(event);
             }, true);
 
             document.addEventListener('click', function(event) {
                 if (event.which === 3) return;
+                if ($(event.target).closest('.dropdown-menu').length) return;
 
                 if (altKey || (ctrlKey && !contextMenuBlocked)) {
                     event.stopPropagation();
@@ -102,6 +113,7 @@ define([
             var delay;
 
             document.addEventListener('contextmenu', function(event) {
+                if ($(event.target).closest('.dropdown-menu').length) return;
                 progressContextMenu(event);
             }, true);
         });

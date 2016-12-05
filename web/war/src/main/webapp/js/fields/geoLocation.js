@@ -81,7 +81,8 @@ define([
             descriptionSelector: '.description',
             latSelector: '.lat',
             lonSelector: '.lon',
-            radiusSelector: '.radius'
+            radiusSelector: '.radius',
+            radiusSearchSelector: '.radius-search'
         });
 
         this.before('initialize', function(node, config) {
@@ -119,6 +120,20 @@ define([
                             })
                         }
                     })
+
+                    self.on('click', {
+                        radiusSearchSelector(event) {
+                            require(['util/popovers/mapSearch/mapSearch'], function(MapSearchPopover) {
+                                MapSearchPopover.attachTo(self.node, {
+                                    currentValue: self.getValue()
+                                });
+                            })
+                        }
+                    })
+                    self.on('mapSearchRegionUpdated', _.debounce((event, {region}) => {
+                        self.setValue(region);
+                        self.triggerFieldUpdated();
+                    }, 500))
                 });
             })
         });

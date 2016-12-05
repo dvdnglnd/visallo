@@ -10,7 +10,6 @@ import org.vertexium.Property;
 import org.vertexium.Vertex;
 import org.visallo.core.exception.VisalloResourceNotFoundException;
 import org.visallo.core.model.termMention.TermMentionRepository;
-import org.visallo.core.util.ClientApiConverter;
 import org.visallo.web.clientapi.model.ClientApiTermMentionsResponse;
 import org.visallo.web.parameterProviders.ActiveWorkspaceId;
 
@@ -42,10 +41,20 @@ public class VertexGetTermMentions implements ParameterizedHandler {
 
         Property property = vertex.getProperty(propertyKey, propertyName);
         if (property == null) {
-            throw new VisalloResourceNotFoundException(String.format("property %s:%s not found on vertex %s", propertyKey, propertyName, vertex.getId()));
+            throw new VisalloResourceNotFoundException(String.format(
+                    "property %s:%s not found on vertex %s",
+                    propertyKey,
+                    propertyName,
+                    vertex.getId()
+            ));
         }
 
-        Iterable<Vertex> termMentions = termMentionRepository.findByOutVertexAndPropertyKey(graphVertexId, propertyKey, authorizations);
-        return ClientApiConverter.toTermMentionsResponse(termMentions, workspaceId, authorizations);
+        Iterable<Vertex> termMentions = termMentionRepository.findByOutVertexAndProperty(
+                graphVertexId,
+                propertyKey,
+                propertyName,
+                authorizations
+        );
+        return termMentionRepository.toClientApi(termMentions, workspaceId, authorizations);
     }
 }

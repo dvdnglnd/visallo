@@ -5,6 +5,7 @@ define(['underscore'], function(_) {
         extensionDocumentation = {},
         uuidToExtensionPoint = {},
         uuidGen = 0,
+        alreadyWarnedAboutDocsByExtensionPoint = {},
         verifyArguments = function(extensionPoint, extension) {
             if (!_.isString(extensionPoint) && extensionPoint) {
                 throw new Error('extensionPoint must be string');
@@ -19,6 +20,13 @@ define(['underscore'], function(_) {
                     extensionPoint: extensionPoint
                 })
             }
+        },
+        shouldWarn = function(extensionPoint) {
+            if (extensionPoint in alreadyWarnedAboutDocsByExtensionPoint) {
+                return;
+            }
+            alreadyWarnedAboutDocsByExtensionPoint[extensionPoint] = true;
+            return true;
         },
         api = {
             debug: function() {
@@ -47,6 +55,16 @@ define(['underscore'], function(_) {
 
                 return uuid;
             },
+            unregisterAllExtensions: function(extensionPoint) {
+                if (!extensionPoint) {
+                    throw new Error('extension point required to unregister')
+                }
+
+                var uuids = _.keys(extensions[extensionPoint])
+                uuidToExtensionPoint = _.omit(uuidToExtensionPoint, uuids)
+                delete extensions[extensionPoint]
+                delete extensionDocumentation[extensionPoint]
+            },
             unregisterExtension: function(extensionUuid) {
                 if (!extensionUuid) {
                     throw new Error('extension uuid required to unregister')
@@ -64,8 +82,12 @@ define(['underscore'], function(_) {
 
                 triggerChange(extensionPoint);
             },
-
-            documentExtensionPoint: function(extensionPoint, description, validator) {
+            markUndocumentedExtensionPoint: function(extensionPoint) {
+                extensionDocumentation[extensionPoint] = {
+                    undocumented: true
+                }
+            },
+            documentExtensionPoint: function(extensionPoint, description, validator, externalDocumentationUrl) {
                 if (!description) {
                     throw new Error('Description required for documentation')
                 }
@@ -76,18 +98,23 @@ define(['underscore'], function(_) {
 
                 extensionDocumentation[extensionPoint] = {
                     description: description,
-                    validator: validator
+                    validator: validator,
+                    externalDocumentationUrl: externalDocumentationUrl
                 };
             },
 
             extensionPointDocumentation: function() {
-                return _.mapObject(extensionDocumentation, function(doc, point) {
+                return _.omit(_.mapObject(extensionDocumentation, function(doc, point) {
+                    if (doc.undocumented) return;
                     return {
                         extensionPoint: point,
                         description: doc.description,
                         validator: doc.validator.toString(),
+                        externalDocumentationUrl: doc.externalDocumentationUrl,
                         registered: api.extensionsForPoint(point).map(replaceFunctions)
                     };
+                }), function(value) {
+                    return !value;
                 });
 
                 function replaceFunctions(object) {
@@ -106,7 +133,7 @@ define(['underscore'], function(_) {
                 var documentation = extensionDocumentation[extensionPoint],
                     byId = extensions[extensionPoint];
 
-                if (!documentation) {
+                if (!documentation && shouldWarn(extensionPoint)) {
                     console.warn('Consider adding documentation for ' +
                         extensionPoint +
                         '\n\tUsage: registry.documentExtensionPoint(\'' + extensionPoint + '\', desc, validator)'

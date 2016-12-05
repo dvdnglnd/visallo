@@ -6,7 +6,7 @@
     <parent>
         <groupId>org.visallo</groupId>
         <artifactId>visallo-web-group</artifactId>
-        <version>1.1-SNAPSHOT</version>
+        <version>3.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>visallo-web</artifactId>
@@ -21,23 +21,13 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-messages</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.visallo</groupId>
-            <artifactId>visallo-model-vertexium-inmemory</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
             <groupId>com.v5analytics.simpleorm</groupId>
             <artifactId>simple-orm-jetty-session-manager</artifactId>
+            <scope>provided</scope>
         </dependency>
         <dependency>
-            <groupId>javax.servlet</groupId>
-            <artifactId>javax.servlet-api</artifactId>
-            <scope>provided</scope>
+            <groupId>org.visallo</groupId>
+            <artifactId>visallo-closure-compiler</artifactId>
         </dependency>
         <dependency>
             <groupId>org.eclipse.jetty</groupId>
@@ -46,11 +36,12 @@
         </dependency>
         <dependency>
             <groupId>org.eclipse.jetty</groupId>
-            <artifactId>jetty-nosql</artifactId>
+            <artifactId>jetty-servlets</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.eclipse.jetty</groupId>
-            <artifactId>jetty-servlets</artifactId>
+            <groupId>javax.servlet</groupId>
+            <artifactId>javax.servlet-api</artifactId>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>com.v5analytics.webster</groupId>
@@ -90,8 +81,8 @@
             <artifactId>handlebars</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.lesscss</groupId>
-            <artifactId>lesscss</artifactId>
+            <groupId>com.asual.lesscss</groupId>
+            <artifactId>lesscss-engine</artifactId>
         </dependency>
         <dependency>
             <groupId>org.reflections</groupId>
@@ -99,66 +90,28 @@
         </dependency>
     </dependencies>
 
-    <profiles>
-        <profile>
-            <id>build-user-guide</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>com.github.eirslett</groupId>
-                        <artifactId>frontend-maven-plugin</artifactId>
-                        <version>${plugin.frontend}</version>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>com.github.eirslett</groupId>
+                <artifactId>frontend-maven-plugin</artifactId>
+                <version>${plugin.frontend}</version>
+                <configuration>
+                    <installDirectory>${frontend.installDirectory}</installDirectory>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>install-node-and-yarn</id>
+                        <goals>
+                            <goal>install-node-and-yarn</goal>
+                        </goals>
                         <configuration>
-                            <workingDirectory>src/main/resources/META-INF/user-guide</workingDirectory>
+                            <nodeVersion>${node.version}</nodeVersion>
+                            <yarnVersion>${yarnjs.version}</yarnVersion>
                         </configuration>
-                        <executions>
-                            <execution>
-                                <id>install node and npm</id>
-                                <goals>
-                                    <goal>install-node-and-npm</goal>
-                                </goals>
-                                <phase>generate-resources</phase>
-                                <configuration>
-                                    <nodeVersion>${node.version}</nodeVersion>
-                                    <npmVersion>${npm.version}</npmVersion>
-                                </configuration>
-                            </execution>
-                            <execution>
-                                <id>npm install</id>
-                                <goals>
-                                    <goal>npm</goal>
-                                </goals>
-                                <phase>generate-resources</phase>
-                                <configuration>
-                                    <arguments>install</arguments>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <version>${plugin.maven.exec.version}</version>
-                        <executions>
-                            <execution>
-                                <id>make install</id>
-                                <phase>generate-resources</phase>
-                                <goals>
-                                    <goal>exec</goal>
-                                </goals>
-                                <configuration>
-                                    <executable>bash</executable>
-                                    <commandlineArgs>${basedir}/src/main/resources/META-INF/user-guide/install.sh</commandlineArgs>
-                                </configuration>
-                            </execution>
-                        </executions>
-
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

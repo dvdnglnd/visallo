@@ -1,16 +1,18 @@
 
 define([
     'flight/lib/component',
-    'tpl!login',
+    'hbs!loginTpl',
     'configuration/plugins/registry',
     'util/withDataRequest',
-    'tpl!util/alert'
+    'tpl!util/alert',
+    'util/requirejs/promise!util/service/propertiesPromise'
 ], function(
     defineComponent,
     template,
     registry,
     withDataRequest,
-    alertTemplate) {
+    alertTemplate,
+    configProperties) {
     'use strict';
 
     return defineComponent(Login, withDataRequest);
@@ -26,10 +28,6 @@ define([
         });
 
         this.after('initialize', function() {
-            var self = this;
-
-            this.$node.html(template({}));
-
             registry.documentExtensionPoint('org.visallo.authentication',
                 'Provides interface for authentication',
                 function(e) {
@@ -37,16 +35,21 @@ define([
                 }
             );
 
-            var authPlugins = registry.extensionsForPoint('org.visallo.authentication'),
+            this.$node.html(template({ showPoweredBy: configProperties['login.showPoweredBy'] === 'true' }));
+            var self = this,
+                authPlugins = registry.extensionsForPoint('org.visallo.authentication'),
                 authNode = this.select('authenticationSelector'),
                 error = '',
                 componentPath = '';
 
+            this.on('showErrorMessage', function(event, data) {
+                authNode.html(alertTemplate({ error: data.message }));
+            })
+
             if (authPlugins.length === 0) {
-                console.warn('No authentication extension registered, Falling back to old plugin');
-                componentPath = 'configuration/plugins/authentication/authentication';
+                error = 'No authentication extension registered.';
             } else if (authPlugins.length > 1) {
-                error = 'Multiple authentication extensions registered. (See console for more)';
+                error = 'Multiple authentication extensions registered. (See console for more info)';
                 console.error('Authentication plugins:', authPlugins);
             } else {
                 componentPath = authPlugins[0].componentPath;

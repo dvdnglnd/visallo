@@ -16,20 +16,23 @@ import java.util.Map;
 
 public class VertexiumOntologyProperty extends OntologyProperty {
     private final Vertex vertex;
+    private final String iri;
     private ImmutableList<String> dependentPropertyIris;
 
     public VertexiumOntologyProperty(Vertex vertex, ImmutableList<String> dependentPropertyIris) {
         this.vertex = vertex;
         this.dependentPropertyIris = dependentPropertyIris;
+        this.iri = OntologyProperties.ONTOLOGY_TITLE.getPropertyValue(vertex);
     }
 
     @Override
     public void setProperty(String name, Object value, Authorizations authorizations) {
         getVertex().setProperty(name, value, OntologyRepository.VISIBILITY.getVisibility(), authorizations);
+        getVertex().getGraph().flush();
     }
 
     public String getTitle() {
-        return OntologyProperties.ONTOLOGY_TITLE.getPropertyValue(vertex);
+        return iri;
     }
 
     public String getDisplayName() {
@@ -60,13 +63,26 @@ public class VertexiumOntologyProperty extends OntologyProperty {
     }
 
     @Override
+    public String[] getTextIndexHints() {
+        return IterableUtils.toArray(OntologyProperties.TEXT_INDEX_HINTS.getPropertyValues(vertex), String.class);
+    }
+
+    @Override
+    public void addTextIndexHints(String textIndexHints, Authorizations authorizations) {
+        OntologyProperties.TEXT_INDEX_HINTS.addPropertyValue(vertex, textIndexHints, textIndexHints, OntologyRepository.VISIBILITY.getVisibility(), authorizations);
+        getVertex().getGraph().flush();
+    }
+
+    @Override
     public void addIntent(String intent, Authorizations authorizations) {
         OntologyProperties.INTENT.addPropertyValue(vertex, intent, intent, OntologyRepository.VISIBILITY.getVisibility(), authorizations);
+        getVertex().getGraph().flush();
     }
 
     @Override
     public void removeIntent(String intent, Authorizations authorizations) {
         OntologyProperties.INTENT.removeProperty(vertex, intent, authorizations);
+        getVertex().getGraph().flush();
     }
 
     public boolean getUserVisible() {
@@ -136,7 +152,7 @@ public class VertexiumOntologyProperty extends OntologyProperty {
         if (propertyValue == null) {
             return null;
         }
-        return JSONUtil.toMap(propertyValue);
+        return JSONUtil.toStringMap(propertyValue);
     }
 
     public Vertex getVertex() {

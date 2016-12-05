@@ -12,9 +12,7 @@ import org.visallo.core.security.VisalloVisibility;
 import org.visallo.web.clientapi.model.ClientApiOntology;
 
 import java.io.File;
-import java.io.OutputStream;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -40,6 +38,8 @@ public interface OntologyRepository {
 
     OntologyProperty getPropertyByIRI(String propertyIRI);
 
+    OntologyProperty getRequiredPropertyByIRI(String propertyIRI);
+
     Relationship getRelationshipByIRI(String propertyIRI);
 
     boolean hasRelationshipByIRI(String relationshipIRI);
@@ -60,16 +60,13 @@ public interface OntologyRepository {
 
     Concept getOrCreateConcept(Concept parent, String conceptIRI, String displayName, File inDir);
 
+    Concept getOrCreateConcept(Concept parent, String conceptIRI, String displayName, File inDir, boolean isDeclaredInOntology);
+
     Relationship getOrCreateRelationshipType(
             Relationship parent,
             Iterable<Concept> domainConcepts,
             Iterable<Concept> rangeConcepts,
-            String relationshipIRI,
-            String displayName,
-            String[] intents,
-            boolean userVisible,
-            boolean deleteable,
-            boolean updateable
+            String relationshipIRI
     );
 
     OntologyProperty getOrCreateProperty(OntologyPropertyDefinition ontologyPropertyDefinition);
@@ -83,8 +80,6 @@ public interface OntologyRepository {
     void importFile(File inFile, IRI documentIRI, Authorizations authorizations) throws Exception;
 
     void importFileData(byte[] inFileData, IRI documentIRI, File inDir, Authorizations authorizations) throws Exception;
-
-    void exportOntology(OutputStream out, IRI documentIRI) throws Exception;
 
     void writePackage(File file, IRI documentIRI, Authorizations authorizations) throws Exception;
 
